@@ -3,9 +3,15 @@
 // Zephyr uses negative errno return codes.  We map these to Zig
 // errors.
 
+const std = @import("std");
+
 pub fn mapError(code: c_int, result: anytype) !@TypeOf(result) {
     switch (code) {
         0 => return result,
-        else => return error.UnknownErrno,
+        -2 => return error.ENOENT,
+        else => {
+            std.log.err("Unknown errno: {}", .{code});
+            return error.UnknownErrno;
+        },
     }
 }
