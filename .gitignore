@@ -1,0 +1,13 @@
+# Ignore vim swap files
+.*.swp
+
+# Zig writes these files as part of the build.
+zig-cache/
+main.o
+
+# West builds by default in 'build'.
+build/
+
+# Cmake seems to make a few directories for the "standalone" build.
+tmp/
+src/standalone_project-stamp/
