@@ -26,6 +26,22 @@ pub fn log(
     std.fmt.format(Writer{ .context = &CharWriter{} }, prefix ++ format ++ "\n", args) catch return;
 }
 
+// A regular print function.
+pub fn println(
+    comptime format: []const u8,
+    args: anytype,
+) void {
+    std.fmt.format(Writer{ .context = &CharWriter{} }, format ++ "\n", args) catch return;
+}
+
+// A regular print function.
+pub fn print(
+    comptime format: []const u8,
+    args: anytype,
+) void {
+    std.fmt.format(Writer{ .context = &CharWriter{} }, format, args) catch return;
+}
+
 // Newlib's putchar is simple, but adds about 4k to the size of the
 // image, so we are probably better of more slowly outputting a
 // character at a time through printk.  Even better would be to add

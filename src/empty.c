@@ -21,6 +21,12 @@ void *__aeabi_memset(void *data, size_t n, int c)
 	return memset(data, c, n);
 }
 
+/* Not sure what this is about.  Perhaps this should be an alias. */
+void *__aeabi_memset4(void *data, size_t n, int c)
+{
+	return memset(data, c, n);
+}
+
 /*
  * Chain jump to the next image from the bootloader.
  */
