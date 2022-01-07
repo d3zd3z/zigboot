@@ -18,7 +18,7 @@ pub const Counter = struct {
     // The number of operations remaining.  When this reaches zero,
     // any flash operations will return error.Expired.
     current: usize,
-    limit: usize,
+    limit: ?usize,
 
     pub fn init(limit: usize) Counter {
         return .{
@@ -27,13 +27,22 @@ pub const Counter = struct {
         };
     }
 
+    // Reset the current count.
+    pub fn reset(self: *Self) void {
+        self.current = 0;
+    }
+
     // Perform an action.  Decrements the counter if possible.  If the
     // counter has expired, returns error.Expired.
     pub fn act(self: *Self) !void {
-        if (self.current < self.limit) {
-            self.current += 1;
+        if (self.limit) |limit| {
+            if (self.current < limit) {
+                self.current += 1;
+            } else {
+                return error.Expired;
+            }
         } else {
-            return error.Expired;
+            self.current += 1;
         }
     }
 
@@ -41,8 +50,13 @@ pub const Counter = struct {
     // the limit.
     pub fn setLimit(self: *Self, limit: usize) !void {
         self.limit = limit;
-        if (self.current >= self.limit)
+        if (self.current >= limit)
             return error.Expired;
+    }
+
+    // Set no limit.
+    pub fn noLimit(self: *Self) void {
+        self.limit = null;
     }
 };
 
@@ -97,7 +111,7 @@ pub const Flash = struct {
     pub fn readState(self: *const Self, sector: usize) State {
         switch (self.state[sector]) {
             .Unsafe => return .Erased,
-            .Unwritten => return .Written,
+            .Unwritten => |h| return .{ .Written = h },
             else => |st| return st,
         }
     }
