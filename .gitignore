@@ -3,6 +3,7 @@
 
 # Zig writes these files as part of the build.
 zig-cache/
+zig-out/
 main.o
 
 # West builds by default in 'build'.
