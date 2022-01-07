@@ -8,7 +8,14 @@ pub const flash = @import("zephyr/flash.zig");
 const raw = struct {
     extern fn zig_log_message(msg: [*:0]const u8) void;
     extern fn printk(msg: [*:0]const u8, data: u8) void;
+
+    extern fn uptime_ticks() i64;
 };
+
+// Get the uptime in ticks.
+pub fn uptime() i64 {
+    return raw.uptime_ticks();
+}
 
 // Use: `pub const log = zephyr.log;` in the root of the project to enable
 // Zig logging to output to the console in Zephyr.

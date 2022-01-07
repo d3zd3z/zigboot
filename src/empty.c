@@ -8,7 +8,9 @@
 #include <drivers/timer/system_timer.h>
 #include <string.h>
 
-int __empty;
+uint64_t uptime_ticks(void) {
+	return k_uptime_get();
+}
 
 /*
  * Zig builds with LLVM, whereas Zephyr is built with GCC.  As such,
@@ -25,6 +27,27 @@ void *__aeabi_memset(void *data, size_t n, int c)
 void *__aeabi_memset4(void *data, size_t n, int c)
 {
 	return memset(data, c, n);
+}
+
+/* Not sure what this is about.  Perhaps this should be an alias. */
+void *__aeabi_memset8(void *data, size_t n, int c)
+{
+	return memset(data, c, n);
+}
+
+void __aeabi_memcpy(void *dest, const void *src, size_t n)
+{
+	memcpy(dest, src, n);
+}
+
+void __aeabi_memclr(void *dest, size_t n)
+{
+	memset(dest, 0, n);
+}
+
+void __aeabi_memclr8(void *dest, size_t n)
+{
+	memset(dest, 0, n);
 }
 
 /*

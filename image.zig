@@ -36,6 +36,14 @@ pub const Image = struct {
     pub fn deinit(self: *Self) void {
         self.fa.close();
     }
+
+    // Read a structure from flash at the given offset.
+    pub fn readStruct(self: *Self, comptime T: type, offset: u32) !T {
+        var data: T = undefined;
+        var bytes = std.mem.asBytes(&data);
+        try self.fa.read(offset, bytes);
+        return data;
+    }
 };
 
 // For testing on the LPC, with Debug enabled, this code is easily
@@ -116,7 +124,7 @@ pub fn dump_layout() !void {
 }
 
 // Hash the image.
-pub fn hash_image(fa: *const FlashArea, header: *const ImageHeader) !void {
+pub fn hash_image(fa: *const FlashArea, header: *const ImageHeader, hash: *[32]u8) !void {
     std.log.info("Hashing image, tlv: {x:>8}", .{header.tlvBase()});
     var buf: [256]u8 = undefined;
     var h = Sha256.init(.{});
@@ -131,11 +139,33 @@ pub fn hash_image(fa: *const FlashArea, header: *const ImageHeader) !void {
         h.update(buf[0..count]);
         pos += count;
     }
-    var out: [32]u8 = undefined;
-    h.final(out[0..]);
+    h.final(hash[0..]);
     zephyr.print("Hash: ", .{});
-    for (out) |ch| {
+    for (hash) |ch| {
         zephyr.print("{x:>2}", .{ch});
     }
     zephyr.print("\n", .{});
+}
+
+// A small hashing benchmarking.  Hashes a single page 'n' times.
+pub fn hash_bench(fa: *const FlashArea, count: usize) !void {
+    const BUFSIZE = 128;
+    const PAGESIZE = 512;
+    var buf: [BUFSIZE]u8 = undefined;
+    var hash: [32]u8 = undefined;
+
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        var h = Sha256.init(.{});
+        var pos: u32 = 0;
+        while (pos < PAGESIZE) {
+            var todo = PAGESIZE - pos;
+            if (todo > BUFSIZE)
+                todo = BUFSIZE;
+            try fa.read(0 + pos, buf[0..todo]);
+            h.update(buf[0..todo]);
+            pos += todo;
+        }
+        h.final(hash[0..]);
+    }
 }

@@ -34,13 +34,75 @@ extern fn chain_jump(vt: u32, msp: u32, pc: u32) noreturn;
 
 fn core() !void {
     var img = try Image.init(@enumToInt(image.Slot.PrimarySecure));
+    try image.dump_layout();
 
-    var arm_header: ArmHeader = undefined;
-    var bytes = std.mem.asBytes(&arm_header);
-    try img.fa.read(img.header.imageStart(), bytes);
-    try image.hash_image(img.fa, &img.header);
+    {
+        std.log.info("Hash benchmark", .{});
+        const timer = Timer.start();
+        try image.hash_bench(img.fa, 1000);
+        timer.stamp("Hash time");
+    }
 
-    try tlv.showTlv(&img);
+    const arm_header = try img.readStruct(ArmHeader, img.header.imageStart());
+    // var arm_header: ArmHeader = undefined;
+    // var bytes = std.mem.asBytes(&arm_header);
+    // try img.fa.read(img.header.imageStart(), bytes);
+
+    const timer = Timer.start();
+    var hash: [32]u8 = undefined;
+    try image.hash_image(img.fa, &img.header, &hash);
+    timer.stamp("Time for hash");
+
+    try tlv.validateTlv(&img);
+    // try tlv.showTlv(&img);
+    try validateImage(&img, hash);
 
     chain_jump(img.fa.off, arm_header.msp, arm_header.pc);
 }
+
+// Go through the TLV, checking hashes and signatures to ensure that
+// this image is valid.
+fn validateImage(img: *Image, hash: [32]u8) !void {
+    var iter = try tlv.TlvIter.init(img);
+    while (try iter.next()) |item| {
+        switch (item.tag) {
+            @enumToInt(tlv.TlvTag.Sha256) => {
+                std.log.warn("Checking hash", .{});
+                const expectHash = try iter.readItem([32]u8, &item);
+                std.log.info("Equal: {}", .{constEql(u8, expectHash[0..], hash[0..])});
+            },
+            else => |tag| {
+                const etag = std.meta.intToEnum(tlv.TlvTag, tag) catch .Other;
+                std.log.info("Tag: 0x{x:0>2} {}", .{ tag, etag });
+            },
+        }
+    }
+}
+
+// Constant time comparison.  "T" must be a numeric type.
+fn constEql(comptime T: type, a: []const T, b: []const T) bool {
+    assert(a.len == b.len);
+    var mismatch: T = 0;
+    for (a) |aelt, i| {
+        mismatch |= aelt ^ b[i];
+    }
+    return mismatch == 0;
+}
+
+// Timing utility.
+const Timer = struct {
+    const Self = @This();
+
+    start: i64,
+
+    fn start() Self {
+        return Self{
+            .start = zephyr.uptime(),
+        };
+    }
+
+    fn stamp(self: *const Self, message: []const u8) void {
+        const now = zephyr.uptime();
+        zephyr.println("{s}: {}ms", .{ message, now - self.start });
+    }
+};
