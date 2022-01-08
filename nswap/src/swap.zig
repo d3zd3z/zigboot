@@ -58,12 +58,21 @@ pub const SwapState = struct {
 
     // Set up the initial flash, and the work indicator.
     pub fn setup(self: *Self) !void {
+        // We track the contents of flash as we build work, and use
+        // this to skip work that isn't needed.  In a real device,
+        // this will be build by hashing the images before starting
+        // the upgrades.
+        var track = try Tracker.init(self.allocator, self.slots[0..]);
+        defer track.deinit(self.allocator);
+
         var i: usize = 0;
         const size = self.slots[0].state.len - 2;
         while (i < size) : (i += 1) {
             for (self.slots) |*slot, slt| {
                 try slot.erase(i);
-                try slot.write(i, hash(slt, i));
+                const h = hash(slt, i);
+                try slot.write(i, h);
+                track.set(slt, i, h);
             }
         }
 
@@ -72,8 +81,7 @@ pub const SwapState = struct {
         // Move slot 0 down.
         i = size;
         while (i > 0) : (i -= 1) {
-            // TODO: Detect hash duplicates and skip work.
-            try self.work.append(Work{
+            try track.tryMove(&self.work, Work{
                 .src_slot = 0,
                 .dest_slot = 0,
                 .src_page = i - 1,
@@ -90,12 +98,13 @@ pub const SwapState = struct {
         //    .page = 0,
         //});
 
+        try track.show();
         i = 0;
         while (i < size) : (i += 1) {
             // TODO: Skip the move if the destination already matches.
 
             // Move slot 1 into the empty space now in slot 0.
-            try self.work.append(Work{
+            try track.tryMove(&self.work, Work{
                 .src_slot = 1,
                 .src_page = i,
                 .dest_slot = 0,
@@ -105,7 +114,7 @@ pub const SwapState = struct {
 
             // Move the shifted slot 0 value into slot 1's final
             // destination.
-            try self.work.append(Work{
+            try track.tryMove(&self.work, Work{
                 .src_slot = 0,
                 .src_page = i + 1,
                 .dest_slot = 1,
@@ -211,6 +220,78 @@ pub const SwapState = struct {
             assert(h1 == hash(0, i));
         }
     }
+
+    // Run the entire state through a tested interruption.  Returns
+    // 'true' if the test ran to the end without being interrupted.
+    pub fn testAt(self: *Self, stopAt: usize) !bool {
+        try print("stop at: {}\n", .{stopAt});
+        try self.setup();
+        self.counter.reset();
+        try self.counter.setLimit(stopAt);
+        if (self.run()) |_| {
+            // All operations completed, so we are done.
+            return true;
+        } else |err| {
+            if (err != error.Expired)
+                return err;
+        }
+        try self.show();
+        self.counter.noLimit();
+        try self.recover();
+        try self.show();
+        try self.check();
+
+        return false;
+    }
+};
+
+// Tracker, used for building up the state.
+const Tracker = struct {
+    const Self = @This();
+    state: [2][]flash.State,
+
+    fn init(allocator: mem.Allocator, slots: []flash.Flash) !Tracker {
+        var state = [2][]flash.State{
+            try allocator.alloc(flash.State, slots[0].state.len),
+            try allocator.alloc(flash.State, slots[1].state.len),
+        };
+        mem.set(flash.State, state[0], .{ .Unsafe = {} });
+        mem.set(flash.State, state[1], .{ .Unsafe = {} });
+        return Tracker{
+            .state = state,
+        };
+    }
+
+    fn deinit(self: *Self, allocator: mem.Allocator) void {
+        allocator.free(self.state[0]);
+        allocator.free(self.state[1]);
+    }
+
+    fn set(self: *Self, slot: usize, page: usize, h: flash.Hash) void {
+        self.state[slot][page] = .{ .Written = h };
+    }
+
+    // Try moving appropriately, creates work if that is appropriate.
+    fn tryMove(self: *Self, work: *ArrayList(Work), w: Work) !void {
+        try print("tryMove: {}\n   {}\n   {}\n", .{
+            w,
+            self.state[w.src_slot][w.src_page],
+            self.state[w.dest_slot][w.dest_page],
+        });
+        if (self.state[w.src_slot][w.src_page].sameHash(&self.state[w.dest_slot][w.dest_page])) {
+            try print("Skipping: {}\n", .{w});
+        }
+        self.state[w.dest_slot][w.dest_page] = self.state[w.src_slot][w.src_page];
+        // self.state[w.src_slot][w.src_page] = .{ .Unsafe = {} };
+        try work.append(w);
+    }
+
+    fn show(self: *const Self) !void {
+        for (self.state[0]) |st0, i| {
+            const st1 = self.state[1][i];
+            try print("  track: {} {}\n", .{ st0, st1 });
+        }
+    }
 };
 
 // Compute a "hash".  These are just indicators to make it easier to
@@ -223,23 +304,10 @@ fn hash(slot: usize, sector: usize) flash.Hash {
 test "Swap" {
     var state = try SwapState.init(testing.allocator, 10);
     defer state.deinit();
-    var stopAt: usize = 1;
-    while (true) : (stopAt += 1) {
-        try print("stop at: {}\n", .{stopAt});
-        try state.setup();
-        state.counter.reset();
-        try state.counter.setLimit(stopAt);
-        if (state.run()) |_| {
-            // All operations completed, so we are done.
-            break;
-        } else |err| {
-            if (err != error.Expired)
-                return err;
-        }
-        try state.show();
-        state.counter.noLimit();
-        try state.recover();
-        try state.show();
-        try state.check();
-    }
+    _ = try state.testAt(16);
+    //var stopAt: usize = 1;
+    //while (true) : (stopAt += 1) {
+    //    if (try state.testAt(stopAt))
+    //        break;
+    //}
 }

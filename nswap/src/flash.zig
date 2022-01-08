@@ -77,10 +77,29 @@ pub const StateType = enum {
 };
 
 pub const State = union(StateType) {
+    const Self = @This();
+
     Unsafe: void,
     Unwritten: Hash,
     Erased: void,
     Written: Hash,
+
+    // Compare this state with another, returning true if they
+    // represent the same written hash.  Any other types will return
+    // an error.
+    pub fn sameHash(self: *const Self, other: *const Self) bool {
+        switch (self.*) {
+            .Written => |h1| {
+                switch (other.*) {
+                    .Written => |h2| {
+                        return h1 == h2;
+                    },
+                    else => return false,
+                }
+            },
+            else => return false,
+        }
+    }
 };
 
 // All operations are done at a sector level.  Real devices would
