@@ -168,33 +168,42 @@ pub const SwapState = struct {
     // Perform recovery, looking for where we can do work.
     pub fn recover(self: *Self) !void {
         try print("----------\n", .{});
+        // Scan the work list, stopping at the first entry where the
+        // destination doesn't appear to have been written.
         var i: usize = 0;
-        var first_i: ?usize = null;
         while (i < self.work.items.len) : (i += 1) {
             const item = &self.work.items[i];
-            const rstate = self.slots[item.src_slot].readState(item.src_page);
-            var status = "    ";
-            switch (rstate) {
-                .Written => |h| {
-                    if (h == item.hash) {
-                        status = "good";
-                        if (first_i) |_| {} else {
-                            first_i = i;
-                        }
-                    }
-                },
-                else => {},
+            const wstate = self.slots[item.dest_slot].readState(item.dest_page);
+            if (!wstate.isWritten(item.hash)) {
+                try print("{} stop {}\n", .{ i, item });
+                const rstate = self.slots[item.src_slot].readState(item.src_page);
+                if (!rstate.isWritten(item.hash)) {
+                    try print("Src is not written\n", .{});
+                    return error.Corruption;
+                }
+                break;
             }
-            try print("{s} {}\n", .{ status, item });
+            try print("{}     {}\n", .{ i, item });
         }
 
         try print("---Recovery---\n", .{});
-        if (first_i) |fi| {
-            i = fi;
-        } else {
-            // Presumably we are finished.
-            return;
+
+        // At this point, as long as we are past the first work item,
+        // it is unclear if the previous work item completed.  If the
+        // previous item has its source still accessible, back up one,
+        // and redo starting with that previous entry.
+        if (i > 0) {
+            i -= 1;
+            const item = &self.work.items[i];
+            const rstate = self.slots[item.src_slot].readState(item.src_page);
+            try print("Check prior: {} {}\n", .{ item, rstate });
+            if (rstate.isWritten(item.hash)) {
+                try print("Backing up\n", .{});
+            } else {
+                i += 1;
+            }
         }
+
         while (i < self.work.items.len) : (i += 1) {
             const item = &self.work.items[i];
             try print("run: {}\n", .{item});
@@ -273,13 +282,14 @@ const Tracker = struct {
 
     // Try moving appropriately, creates work if that is appropriate.
     fn tryMove(self: *Self, work: *ArrayList(Work), w: Work) !void {
-        try print("tryMove: {}\n   {}\n   {}\n", .{
-            w,
-            self.state[w.src_slot][w.src_page],
-            self.state[w.dest_slot][w.dest_page],
-        });
+        //try print("tryMove: {}\n   {}\n   {}\n", .{
+        //    w,
+        //    self.state[w.src_slot][w.src_page],
+        //    self.state[w.dest_slot][w.dest_page],
+        //});
         if (self.state[w.src_slot][w.src_page].sameHash(&self.state[w.dest_slot][w.dest_page])) {
-            try print("Skipping: {}\n", .{w});
+            //try print("Skipping: {}\n", .{w});
+            return;
         }
         self.state[w.dest_slot][w.dest_page] = self.state[w.src_slot][w.src_page];
         // self.state[w.src_slot][w.src_page] = .{ .Unsafe = {} };

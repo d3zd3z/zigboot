@@ -100,6 +100,17 @@ pub const State = union(StateType) {
             else => return false,
         }
     }
+
+    // Does this state indicate written data with the given has?
+    pub fn isWritten(self: *const Self, hash: Hash) bool {
+        switch (self.*) {
+            .Written => |h| {
+                return h == hash;
+            },
+            else => {},
+        }
+        return false;
+    }
 };
 
 // All operations are done at a sector level.  Real devices would
