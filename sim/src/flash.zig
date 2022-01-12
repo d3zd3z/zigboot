@@ -1,0 +1,280 @@
+// Flash API unified between simulator and on-target.
+
+const std = @import("std");
+const mem = std.mem;
+const testing = std.testing;
+
+// A simulated flash device.  We only simulate parts of flash that
+// have consisten sized sectors.  The simulated flash is significantly
+// more restrictive than regular flash, including the following:
+// - write alignment is strictly enforced
+// - cannot read across sector boundaries
+// - interrupted operations fail on read
+// - interrupted operations return worst-case status on "check" (in
+//   other words, the interrupted operation looks like it completed,
+//   but will fail the test later.
+pub const SimFlash = struct {
+    const Self = @This();
+
+    allocator: mem.Allocator,
+    areas: []Area,
+
+    /// Construct a new flash simulator.  There will be two areas
+    /// created, the first will be one sector larger than the other.
+    /// TODO: Add support for 4 regions with upgrades.
+    pub fn init(allocator: mem.Allocator, sector_size: usize, sectors: usize) !SimFlash {
+        var base: usize = 128 * 1024;
+        var primary = try Area.init(allocator, .{
+            .base = base,
+            .sectors = sectors + 1,
+            .sector_size = sector_size,
+        });
+        errdefer primary.deinit();
+        base += (sectors + 1) * sector_size;
+        var secondary = try Area.init(allocator, .{
+            .base = base,
+            .sectors = sectors,
+            .sector_size = sector_size,
+        });
+        errdefer secondary.deinit();
+        var areas = try allocator.alloc(Area, 2);
+        areas[0] = primary;
+        areas[1] = secondary;
+        return Self{
+            .allocator = allocator,
+            .areas = areas,
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        for (self.areas) |*area| {
+            area.deinit();
+        }
+        self.allocator.free(self.areas);
+    }
+
+    /// Open the given numbered area.
+    pub fn open(self: *const Self, id: u8) !*Area {
+        if (id < self.areas.len) {
+            return &self.areas[id];
+        } else {
+            return error.InvalidArea;
+        }
+    }
+};
+
+pub const Area = struct {
+    const Self = @This();
+
+    allocator: mem.Allocator,
+
+    // These fields are shared with the real implementation.
+    off: usize,
+    size: usize,
+
+    sectors: usize,
+    sector_size: usize,
+    log2_ssize: std.math.Log2Int(usize),
+
+    // The data contents of the flash.
+    data: []u8,
+    state: []State,
+
+    pub const AreaInit = struct {
+        base: usize,
+        sectors: usize,
+        sector_size: usize,
+    };
+
+    pub fn init(allocator: mem.Allocator, info: AreaInit) !Area {
+        std.debug.assert(std.math.isPowerOfTwo(info.sector_size));
+        const log2 = std.math.log2_int(usize, info.sector_size);
+
+        var state = try allocator.alloc(State, info.sectors);
+        mem.set(State, state, .Unsafe);
+        return Area{
+            .off = info.base,
+            .sectors = info.sectors,
+            .sector_size = info.sector_size,
+            .data = try allocator.alloc(u8, info.sectors * info.sector_size),
+            .state = state,
+            .allocator = allocator,
+            .log2_ssize = log2,
+            .size = info.sectors * info.sector_size,
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.allocator.free(self.data);
+        self.allocator.free(self.state);
+    }
+
+    // Read a section of data from this area.  These are restricted
+    // to be within a single sector.
+    pub fn read(self: *Self, offset: usize, buf: []u8) !void {
+        // Ensure we are in bounds.
+        if (offset + buf.len > self.data.len) {
+            return error.FlashBound;
+        }
+
+        const page = offset >> self.log2_ssize;
+
+        // Ensure we remain entirely within a sector.
+        if (page != ((offset + buf.len - 1) >> self.log2_ssize)) {
+            return error.BeyondSector;
+        }
+
+        switch (self.state[page]) {
+            .Unsafe => return error.ReadUnsafe,
+            .Unwritten => return error.ReadUnwritten,
+            .Erased => return error.ReadErased,
+            .Written => {},
+        }
+
+        std.mem.copy(u8, buf, self.data[offset .. offset + buf.len]);
+    }
+
+    // Erase a sector.  The passed data must correspond exactly with
+    // one or more sectors.
+    pub fn erase(self: *Self, off: usize, len: usize) !void {
+        // TODO: We're relying on the Zig bounds check here.  This
+        // is insecure with "ReleaseFast".
+        if (off + len > self.data.len) {
+            return error.FlashBound;
+        }
+        var page = off >> self.log2_ssize;
+        if ((page << self.log2_ssize) != off) {
+            return error.EraseMisaligned;
+        }
+        var count = len >> self.log2_ssize;
+        if ((count << self.log2_ssize) != len) {
+            return error.EraseMisaligned;
+        }
+
+        while (count > 0) {
+            self.state[page] = .Unsafe;
+            mem.set(u8, self.data[page << self.log2_ssize .. (page + 1) << self.log2_ssize], 0xFF);
+
+            // TODO: Interrupt check
+
+            self.state[page] = .Erased;
+
+            page += 1;
+            count -= 1;
+        }
+    }
+
+    // Write data to a page.  Writes must always be an entire page,
+    // and exactly one page.
+    pub fn write(self: *Self, off: usize, buf: []const u8) !void {
+        // TODO: Relying on bounds check.
+        if (off + buf.len > self.data.len) {
+            return error.FlashBound;
+        }
+        const page = off >> self.log2_ssize;
+        if ((page << self.log2_ssize) != off) {
+            return error.WriteMisaligned;
+        }
+        if (buf.len != self.sector_size) {
+            return error.WriteMisaligned;
+        }
+
+        switch (self.state[page]) {
+            .Unsafe => return error.WriteUnsafe,
+            .Unwritten => return error.WriteUnwritten,
+            .Erased => {},
+            .Written => return error.WriteWritten,
+        }
+
+        self.state[page] = .Unwritten;
+        mem.copy(u8, self.data[off .. off + self.sector_size], buf);
+
+        // TODO: Interrupt check
+
+        self.state[page] = .Written;
+    }
+
+    // Try to determine the state of flash.  This tries to make it
+    // look like partially completed operations have finished, since
+    // real flash can behave like that.
+    pub fn getState(self: *Self, off: usize) !State {
+        if (off > self.data.len) {
+            return error.FlashBound;
+        }
+        const page = off >> self.log2_ssize;
+        if ((page << self.log2_ssize) != off) {
+            return error.GetStateMisaligned;
+        }
+
+        switch (self.state[page]) {
+            .Unsafe, .Erased => return .Erased,
+            .Written, .Unwritten => return .Written,
+        }
+    }
+};
+
+pub const State = enum {
+    // Flash is in an unknown state.  Reads and writes will fail,
+    // status check will return erased.
+    Unsafe,
+
+    // Partially written data.  Reads and writes will fail, status
+    // check will return written data.
+    Unwritten,
+
+    // A completed erase.  Writes are allowed, read will return fail
+    // (simulating ECC devices).  Status check will return written.
+    Erased,
+
+    // A completed write.  Reads will succeed, Writes will fail.
+    // Status check returns written.
+    Written,
+};
+
+test "Flash operations" {
+    // Predictable prng for testing.
+
+    const page_size = 512;
+    const page_count = 256;
+
+    var sim = try SimFlash.init(testing.allocator, page_size, page_count);
+    defer sim.deinit();
+
+    var buf = try testing.allocator.alloc(u8, page_size);
+    defer testing.allocator.free(buf);
+
+    var buf2 = try testing.allocator.alloc(u8, page_size);
+    defer testing.allocator.free(buf2);
+
+    var area = try sim.open(0);
+
+    // The initial data should appear erased, but then fail to read or
+    // write.
+    try testing.expectEqual(State.Erased, try area.getState(0));
+    try testing.expectError(error.ReadUnsafe, area.read(0, buf));
+    try testing.expectError(error.WriteUnsafe, area.write(0, buf));
+
+    // Write data into flash.
+    var page: usize = 0;
+    while (page < page_count) : (page += 1) {
+        const offset = page * page_size;
+        try area.erase(offset, page_size);
+        fillBuf(buf, page);
+        try area.write(offset, buf);
+    }
+
+    // Make sure it can all read back.
+    page = 0;
+    while (page < page_count) : (page += 1) {
+        fillBuf(buf, page);
+        std.mem.set(u8, buf2, 0xAA);
+        try area.read(page * page_size, buf2);
+        try testing.expectEqualSlices(u8, buf, buf2);
+    }
+}
+
+// Fill a buffer with random bytes, using the given seed.
+fn fillBuf(buf: []u8, seed: u64) void {
+    var rng = std.rand.DefaultPrng.init(seed);
+    rng.fill(buf);
+}
