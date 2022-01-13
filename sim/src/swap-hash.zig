@@ -36,11 +36,11 @@ const flash = @import("flash.zig");
 const Sha256 = std.crypto.hash.sha2.Sha256;
 
 // For now, the sizes are all hard coded.
-const page_size = @as(usize, flash.page_size);
-const page_shift = std.math.log2_int(usize, page_size);
+pub const page_size = @as(usize, flash.page_size);
+pub const page_shift = std.math.log2_int(usize, page_size);
 
 // The largest number of pages the image portion of the data can be.
-const max_pages = flash.max_pages;
+pub const max_pages = flash.max_pages;
 
 // The largest number of work steps for a given phase of work.  The
 // latest amount of work is the swap, which has two operations per
@@ -55,7 +55,7 @@ const max_work = 2 * flash.max_pages;
 // bytes), we would expect a collision about every '2^32/(3*max_page)'
 // erase operations.  This is better than 1 in a million, which means
 // it is rare, but probably will happen at some point.
-const hash_bytes = 4;
+pub const hash_bytes = 4;
 
 const Hash = [hash_bytes]u8;
 
@@ -222,7 +222,7 @@ pub const State = struct {
         std.log.info("---- Running work ----", .{});
         for (self.work) |work, i| {
             for (work[0..self.work_len[i]]) |*item| {
-                std.log.info("do: {any}", .{item});
+                // std.log.info("do: {any}", .{item});
                 try self.areas[item.dest_slot].erase(item.dest_page << page_shift, page_size);
                 try self.areas[item.src_slot].read(item.src_page << page_shift, self.tmp[0..]);
                 try self.areas[item.dest_slot].write(item.dest_page << page_shift, self.tmp[0..]);
@@ -234,7 +234,7 @@ pub const State = struct {
         if (self.work_len[phase] >= self.work[phase].len)
             return error.WorkOverflow;
 
-        std.log.info("push work {}: {any}", .{ self.work_len[phase], work });
+        // std.log.info("push work {}: {any}", .{ self.work_len[phase], work });
         self.work[phase][self.work_len[phase]] = work;
         self.work_len[phase] += 1;
     }
@@ -267,10 +267,10 @@ pub const State = struct {
     // same.  Returns error.HashCollision if the differ, which will
     // result in the top level code retrying with a different prefix.
     fn validateSame(self: *Self, slots: [2]u8, pages: [2]usize, len: usize) !bool {
-        std.log.info("Compare: {any} with {any} {any} {any}", .{
-            slots,                           pages, self.hashes[slots[0]][pages[0]],
-            self.hashes[slots[1]][pages[1]],
-        });
+        // std.log.info("Compare: {any} with {any} {any} {any}", .{
+        //     slots,                           pages, self.hashes[slots[0]][pages[0]],
+        //     self.hashes[slots[1]][pages[1]],
+        // });
         if (std.mem.eql(
             u8,
             self.hashes[slots[0]][pages[0]][0..],
@@ -283,7 +283,64 @@ pub const State = struct {
             return false;
         }
     }
+
+    // Return an iterator over all of the hashes.
+    pub fn iterHashes(self: *const Self) HashIter {
+        return .{
+            .state = self,
+            .phase = 0,
+            .pos = 0,
+        };
+    }
 };
+
+pub const HashIter = struct {
+    const Self = @This();
+
+    state: *const State,
+    phase: usize,
+    pos: usize,
+
+    pub fn next(self: *Self) ?*const [hash_bytes]u8 {
+        while (true) {
+            if (self.phase >= 2)
+                return null;
+
+            if (self.pos >= asPages(self.state.sizes[self.phase])) {
+                self.pos = 0;
+                self.phase += 1;
+            } else {
+                break;
+            }
+        }
+
+        const result = &self.state.hashes[self.phase][self.pos];
+        std.log.info("returning: {any} (phase:{}, pos:{}, sizes:{any})", .{
+            result.*,
+            self.phase,
+            self.pos,
+            self.state.sizes[self.phase],
+        });
+        self.pos += 1;
+        return result;
+    }
+};
+
+fn asPages(value: usize) usize {
+    return (value + page_size - 1) >> page_shift;
+}
+
+// Calculate the has of a given block of data, returning the shortened
+// version.
+pub fn calcHash(data: []const u8) [hash_bytes]u8 {
+    var hh = Sha256.init(.{});
+    hh.update(data);
+    var hash: [32]u8 = undefined;
+    hh.final(hash[0..]);
+    var result: [hash_bytes]u8 = undefined;
+    std.mem.copy(u8, result[0..], hash[0..4]);
+    return result;
+}
 
 // A single unit of work.
 // Zig theoretically will reorder structures for better padding, but

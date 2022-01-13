@@ -96,6 +96,31 @@ pub const SimFlash = struct {
             }
         }
     }
+
+    // Verify the images in the slots (assuming they are reversed).
+    pub fn verifyImages(self: *Self, sizes: [2]usize) !void {
+        var buf: [page_size]u8 = undefined;
+        var buf_exp: [page_size]u8 = undefined;
+
+        for (sizes) |size, id| {
+            var area = try self.open(@intCast(u8, id));
+
+            var pos: usize = 0;
+            while (pos < size) {
+                var count = size - pos;
+                if (count > page_size)
+                    count = page_size;
+
+                std.mem.set(u8, buf_exp[0..], 0xFF);
+                fillBuf(buf_exp[0..count], (1 - id) * max_pages + pos);
+
+                try area.read(pos, buf[0..]);
+                try std.testing.expectEqualSlices(u8, buf_exp[0..], buf[0..]);
+
+                pos += count;
+            }
+        }
+    }
 };
 
 pub const Area = struct {
@@ -245,6 +270,13 @@ pub const Area = struct {
             .Unsafe, .Erased => return .Erased,
             .Written, .Unwritten => return .Written,
         }
+    }
+
+    // Save the contents of flash (useful for debugging).
+    pub fn save(self: *const Self, path: []const u8) !void {
+        var fd = try std.fs.cwd().createFile(path, .{});
+        defer fd.close();
+        try fd.writeAll(self.data);
     }
 };
 
