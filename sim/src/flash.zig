@@ -1,8 +1,13 @@
+// SPDX-License-Identifier: Apache-2.0
 // Flash API unified between simulator and on-target.
 
 const std = @import("std");
 const mem = std.mem;
 const testing = std.testing;
+
+// TODO: These shouldn't be hard coded.
+pub const page_size = 512;
+pub const max_pages = 1024;
 
 // A simulated flash device.  We only simulate parts of flash that
 // have consisten sized sectors.  The simulated flash is significantly
@@ -18,6 +23,8 @@ pub const SimFlash = struct {
 
     allocator: mem.Allocator,
     areas: []Area,
+
+    counter: Counter,
 
     /// Construct a new flash simulator.  There will be two areas
     /// created, the first will be one sector larger than the other.
@@ -43,6 +50,7 @@ pub const SimFlash = struct {
         return Self{
             .allocator = allocator,
             .areas = areas,
+            .counter = Counter.init(null),
         };
     }
 
@@ -59,6 +67,33 @@ pub const SimFlash = struct {
             return &self.areas[id];
         } else {
             return error.InvalidArea;
+        }
+    }
+
+    /// Install test images in the two slots.  There are no headers
+    /// (yet), just semi-random data.
+    pub fn installImages(self: *Self, sizes: [2]usize) !void {
+        // Always off target, large stack buffer is fine.
+        var buf: [page_size]u8 = undefined;
+
+        for (sizes) |size, id| {
+            var area = try self.open(@intCast(u8, id));
+
+            var pos: usize = 0;
+            while (pos < size) {
+                var count = size - pos;
+                if (count > page_size)
+                    count = page_size;
+
+                // Generate some random data.
+                std.mem.set(u8, buf[0..], 0xFF);
+                fillBuf(buf[0..count], id * max_pages + pos);
+
+                try area.erase(pos, page_size);
+                try area.write(pos, buf[0..]);
+
+                pos += count;
+            }
         }
     }
 };
@@ -231,10 +266,57 @@ pub const State = enum {
     Written,
 };
 
+// A counter to disrupt flash operations.  The is loaned to each flash
+// device so that the counts are shared across multiple
+// partitions/devices.
+pub const Counter = struct {
+    const Self = @This();
+
+    // Number of operations, and the limit.
+    current: usize,
+    limit: ?usize,
+
+    pub fn init(limit: ?usize) Counter {
+        return .{
+            .current = 0,
+            .limit = limit,
+        };
+    }
+
+    // Reset the current count.
+    pub fn reset(self: *Self) void {
+        self.current = 0;
+    }
+
+    // Perform an action.  Bumps the counter, if possible.  If
+    // expired, returns error.Expired.
+    pub fn act(self: *Self) !void {
+        if (self.limit) |limit| {
+            if (self.current < limit) {
+                self.current += 1;
+            } else {
+                return error.Expired;
+            }
+        } else {
+            self.current += 1;
+        }
+    }
+
+    // Set a limit.  May return error.Expired if the current value
+    // would exceed the limit.  Limit of 'null' means to have no
+    // limit.
+    pub fn setLimit(self: *Self, limit: ?usize) !void {
+        self.limit = limit;
+        if (self.limit) |lim| {
+            if (self.current >= lim)
+                return error.Expired;
+        }
+    }
+};
+
 test "Flash operations" {
     // Predictable prng for testing.
 
-    const page_size = 512;
     const page_count = 256;
 
     var sim = try SimFlash.init(testing.allocator, page_size, page_count);
