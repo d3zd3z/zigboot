@@ -12,7 +12,9 @@ const tlv = @import("tlv.zig");
 const Image = image.Image;
 const flashTest = @import("testing.zig").flashTest;
 
-const FlashArea = zephyr.flash.FlashArea;
+const sys = @import("src/sys.zig");
+
+const FlashArea = sys.flash.FlashArea;
 
 // Setup Zig logging to output through Zephyr.
 pub const log_level: std.log.Level = .info;

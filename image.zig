@@ -6,8 +6,9 @@ const assert = std.debug.assert;
 const Sha256 = std.crypto.hash.sha2.Sha256;
 
 const zephyr = @import("zephyr.zig");
+const sys = @import("src/sys.zig");
 
-const FlashArea = zephyr.flash.FlashArea;
+const FlashArea = sys.flash.FlashArea;
 
 // An open image.
 pub const Image = struct {

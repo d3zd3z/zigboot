@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-// Bindings for the flash area API within Zephyr.
+//
+// Native (Zephyr) flash support.
 
 const std = @import("std");
-const errno = @import("errno.zig");
+const errno = @import("../zephyr/errno.zig");
 
 const raw = struct {
     extern fn flash_area_open(id: u8, fa: **const FlashArea) c_int;

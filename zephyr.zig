@@ -3,8 +3,6 @@
 
 const std = @import("std");
 
-pub const flash = @import("zephyr/flash.zig");
-
 const raw = struct {
     extern fn zig_log_message(msg: [*:0]const u8) void;
     extern fn printk(msg: [*:0]const u8, data: u8) void;
