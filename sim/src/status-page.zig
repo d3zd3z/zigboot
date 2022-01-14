@@ -36,10 +36,13 @@ const Area = flash.Area;
 // data, beyond normal CPU alignment issues.
 const LastPage = extern struct {
     // The first block of hashes
-    hashes: [(512 - 40) / 4][swap_hash.hash_bytes]u8,
+    hashes: [(512 - 72) / 4][swap_hash.hash_bytes]u8,
 
     // The sizes of the two regions (in bytes) used for swap.
     sizes: [2]u32,
+
+    // Encryption keys used when encrypting.
+    keys: [2][16]u8,
 
     // The prefix used for the hashes.
     prefix: [4]u8,
