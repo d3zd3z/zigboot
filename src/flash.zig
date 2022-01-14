@@ -12,3 +12,8 @@ usingnamespace switch (builtin.os.tag) {
     .linux => @import("flash/sim.zig"),
     else => @compileError("Unsupported platform"),
 };
+
+test {
+    _ = @import("flash/native.zig");
+    _ = @import("flash/sim.zig");
+}

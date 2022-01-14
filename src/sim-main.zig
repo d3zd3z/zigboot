@@ -1,8 +1,10 @@
+// SPDX-License-Identifier: Apache-2.0
+
 const std = @import("std");
 const builtin = @import("builtin");
 
 const sys = @import("sys.zig");
-const status = @import("sim/status-page.zig");
+const status = @import("status.zig");
 const SimFlash = sys.flash.SimFlash;
 const SwapState = @import("sim/swap-hash.zig").State;
 
@@ -40,5 +42,6 @@ pub fn main() !void {
 
 test {
     _ = @import("sys.zig");
-    _ = @import("sim/status-page.zig");
+    _ = @import("flash.zig");
+    _ = @import("status.zig");
 }

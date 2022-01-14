@@ -5,7 +5,9 @@ const Self = @This();
 
 const std = @import("std");
 const sys = @import("../../src/sys.zig");
-const swap_hash = @import("swap-hash.zig");
+
+// TODO: This should be configured, not pulled from the swap code.
+const swap_hash = @import("../sim/swap-hash.zig");
 
 const page_size = swap_hash.page_size;
 const page_shift = swap_hash.page_shift;
