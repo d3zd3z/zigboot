@@ -315,12 +315,12 @@ pub const HashIter = struct {
         }
 
         const result = &self.state.hashes[self.phase][self.pos];
-        std.log.info("returning: {any} (phase:{}, pos:{}, sizes:{any})", .{
-            result.*,
-            self.phase,
-            self.pos,
-            self.state.sizes[self.phase],
-        });
+        //std.log.info("returning: {any} (phase:{}, pos:{}, sizes:{any})", .{
+        //    result.*,
+        //    self.phase,
+        //    self.pos,
+        //    self.state.sizes[self.phase],
+        //});
         self.pos += 1;
         return result;
     }
