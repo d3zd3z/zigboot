@@ -4,12 +4,12 @@
 const Self = @This();
 
 const std = @import("std");
-const flash = @import("flash.zig");
+const sys = @import("../../src/sys.zig");
 const swap_hash = @import("swap-hash.zig");
 
 const page_size = swap_hash.page_size;
 const page_shift = swap_hash.page_shift;
-const Area = flash.Area;
+const Area = sys.flash.Area;
 
 // Flash layout.
 //

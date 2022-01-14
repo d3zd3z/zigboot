@@ -32,20 +32,20 @@
 // This implementation supports the page based devices.
 
 const std = @import("std");
-const flash = @import("flash.zig");
+const sys = @import("../sys.zig");
 const Sha256 = std.crypto.hash.sha2.Sha256;
 
 // For now, the sizes are all hard coded.
-pub const page_size = @as(usize, flash.page_size);
+pub const page_size = @as(usize, sys.flash.page_size);
 pub const page_shift = std.math.log2_int(usize, page_size);
 
 // The largest number of pages the image portion of the data can be.
-pub const max_pages = flash.max_pages;
+pub const max_pages = sys.flash.max_pages;
 
 // The largest number of work steps for a given phase of work.  The
 // latest amount of work is the swap, which has two operations per
 // page of data.
-const max_work = 2 * flash.max_pages;
+const max_work = 2 * sys.flash.max_pages;
 
 // The number of hash bytes to use.  This value is a tradeoff.
 // Collisions will require all of the data to be recomputed.  Only
@@ -74,7 +74,7 @@ pub const State = struct {
     sizes: [2]usize,
 
     // The flash areas themselves.
-    areas: [2]*flash.Area,
+    areas: [2]*sys.flash.Area,
 
     // These are all of the hashes.
     hashes: [2][max_pages]Hash = undefined,
@@ -93,13 +93,13 @@ pub const State = struct {
     // prefix is used as a seed to the hash function.  If the
     // operations detect a hash collision, this can be restarted with
     // a different prefix, which will possibly remove the collision.
-    pub fn init(sim: *flash.SimFlash, sizeA: usize, sizeB: usize, prefix: u32) !State {
+    pub fn init(sim: *sys.flash.SimFlash, sizeA: usize, sizeB: usize, prefix: u32) !State {
         var a = try sim.open(0); // TODO: Better numbers.
         var b = try sim.open(1);
         var bprefix: [4]u8 = undefined;
         std.mem.copy(u8, bprefix[0..], std.mem.asBytes(&prefix));
         return State{
-            .areas = [2]*flash.Area{ a, b },
+            .areas = [2]*sys.flash.Area{ a, b },
             .sizes = [2]usize{ sizeA, sizeB },
             .prefix = bprefix,
         };

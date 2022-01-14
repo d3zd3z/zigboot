@@ -1,9 +1,10 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const status = @import("status-page.zig");
-const SimFlash = @import("flash.zig").SimFlash;
-const SwapState = @import("swap-hash.zig").State;
+const sys = @import("sys.zig");
+const status = @import("sim/status-page.zig");
+const SimFlash = sys.flash.SimFlash;
+const SwapState = @import("sim/swap-hash.zig").State;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -38,6 +39,6 @@ pub fn main() !void {
 }
 
 test {
-    _ = @import("flash.zig");
-    _ = @import("status-page.zig");
+    _ = @import("sys.zig");
+    _ = @import("sim/status-page.zig");
 }
