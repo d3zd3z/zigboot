@@ -22,7 +22,7 @@ pub const SimFlash = struct {
     const Self = @This();
 
     allocator: mem.Allocator,
-    areas: []Area,
+    areas: []FlashArea,
 
     counter: Counter,
 
@@ -31,20 +31,20 @@ pub const SimFlash = struct {
     /// TODO: Add support for 4 regions with upgrades.
     pub fn init(allocator: mem.Allocator, sector_size: usize, sectors: usize) !SimFlash {
         var base: usize = 128 * 1024;
-        var primary = try Area.init(allocator, .{
+        var primary = try FlashArea.init(allocator, .{
             .base = base,
             .sectors = sectors + 1,
             .sector_size = sector_size,
         });
         errdefer primary.deinit();
         base += (sectors + 1) * sector_size;
-        var secondary = try Area.init(allocator, .{
+        var secondary = try FlashArea.init(allocator, .{
             .base = base,
             .sectors = sectors,
             .sector_size = sector_size,
         });
         errdefer secondary.deinit();
-        var areas = try allocator.alloc(Area, 2);
+        var areas = try allocator.alloc(FlashArea, 2);
         areas[0] = primary;
         areas[1] = secondary;
         return Self{
@@ -62,7 +62,7 @@ pub const SimFlash = struct {
     }
 
     /// Open the given numbered area.
-    pub fn open(self: *const Self, id: u8) !*Area {
+    pub fn open(self: *const Self, id: u8) !*FlashArea {
         if (id < self.areas.len) {
             return &self.areas[id];
         } else {
@@ -123,7 +123,7 @@ pub const SimFlash = struct {
     }
 };
 
-pub const Area = struct {
+pub const FlashArea = struct {
     const Self = @This();
 
     allocator: mem.Allocator,
@@ -146,13 +146,13 @@ pub const Area = struct {
         sector_size: usize,
     };
 
-    pub fn init(allocator: mem.Allocator, info: AreaInit) !Area {
+    pub fn init(allocator: mem.Allocator, info: AreaInit) !FlashArea {
         std.debug.assert(std.math.isPowerOfTwo(info.sector_size));
         const log2 = std.math.log2_int(usize, info.sector_size);
 
         var state = try allocator.alloc(State, info.sectors);
         mem.set(State, state, .Unsafe);
-        return Area{
+        return FlashArea{
             .off = info.base,
             .sectors = info.sectors,
             .sector_size = info.sector_size,

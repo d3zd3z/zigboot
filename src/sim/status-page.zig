@@ -9,7 +9,7 @@ const swap_hash = @import("swap-hash.zig");
 
 const page_size = swap_hash.page_size;
 const page_shift = swap_hash.page_shift;
-const Area = sys.flash.Area;
+const FlashArea = sys.flash.FlashArea;
 
 // Flash layout.
 //
@@ -106,7 +106,7 @@ const Phase = enum(u8) {
 
 // Write a magic page to the given area.  This is done in slot 1 to
 // indicate that a swap should be initiated.
-pub fn writeMagic(fa: *Area) !void {
+pub fn writeMagic(fa: *FlashArea) !void {
     const ult = (fa.size >> page_shift) - 1;
     const penult = ult - 1;
 

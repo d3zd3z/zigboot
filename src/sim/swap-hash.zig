@@ -74,7 +74,7 @@ pub const State = struct {
     sizes: [2]usize,
 
     // The flash areas themselves.
-    areas: [2]*sys.flash.Area,
+    areas: [2]*sys.flash.FlashArea,
 
     // These are all of the hashes.
     hashes: [2][max_pages]Hash = undefined,
@@ -99,7 +99,7 @@ pub const State = struct {
         var bprefix: [4]u8 = undefined;
         std.mem.copy(u8, bprefix[0..], std.mem.asBytes(&prefix));
         return State{
-            .areas = [2]*sys.flash.Area{ a, b },
+            .areas = [2]*sys.flash.FlashArea{ a, b },
             .sizes = [2]usize{ sizeA, sizeB },
             .prefix = bprefix,
         };
