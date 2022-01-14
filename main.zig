@@ -2,6 +2,7 @@
 // Zig main program
 
 const std = @import("std");
+const builtin = @import("builtin");
 const assert = std.debug.assert;
 const Sha256 = std.crypto.hash.sha2.Sha256;
 
@@ -9,6 +10,7 @@ const zephyr = @import("zephyr.zig");
 const image = @import("image.zig");
 const tlv = @import("tlv.zig");
 const Image = image.Image;
+const flashTest = @import("testing.zig").flashTest;
 
 const FlashArea = zephyr.flash.FlashArea;
 
@@ -18,7 +20,7 @@ pub const log = zephyr.log;
 
 export fn main() void {
     std.log.info("Starting zigboot", .{});
-    core() catch |err| {
+    flashTest() catch |err| {
         std.log.err("Fatal: {}", .{err});
     };
 }
