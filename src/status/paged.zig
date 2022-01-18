@@ -4,10 +4,16 @@
 const Self = @This();
 
 // The status area we are currently using.
-area: *sys.flash.FlashArea,
+area: *sys.flash.FlashArea = undefined,
+
+// We have a buffer for the last page and one for the other pages.
+buf_last: LastPage = undefined,
+buf_hash: HashPage = undefined,
 
 const std = @import("std");
+const testing = std.testing;
 const sys = @import("../../src/sys.zig");
+const BootTest = @import("../test.zig").BootTest;
 
 // TODO: This should be configured, not pulled from the swap code.
 const swap_hash = @import("../sim/swap-hash.zig");
@@ -18,6 +24,11 @@ const FlashArea = sys.flash.FlashArea;
 
 /// The phase of the flash upgrade.
 pub const Phase = enum(u8) {
+    /// This doesn't appear to be in any identifiable state.  This
+    /// could mean the magic number is not present, or hashes are
+    /// incorrect.
+    Unknown,
+
     /// An upgrade has been requested.  This is not directly written to
     /// the status page, but is indicated when the magic value has been
     /// written with no other data.
@@ -36,22 +47,78 @@ pub const Phase = enum(u8) {
     Done,
 };
 
-// Write a magic page to the given area.  This is done in slot 1 to
-// indicate that a swap should be initiated.
-pub fn writeMagic(fa: *sys.flash.FlashArea) !void {
-    const ult = (fa.size >> page_shift) - 1;
+pub fn init(fa: *sys.flash.FlashArea) !Self {
+    return Self{
+        .area = fa,
+    };
+}
+
+/// Scan the contents of flash to determine what state we are in.
+pub fn scan(self: *Self) !Phase {
+    const ult = (self.area.size >> page_shift) - 1;
     const penult = ult - 1;
 
-    // TODO: Needs to be target static.
-    var buf: LastPage = undefined;
-    std.mem.set(u8, std.mem.asBytes(&buf), 0xFF);
-    buf.magic = page_magic;
+    // Zephyr's flash API will allow reads from unwritten data, even
+    // on devices with ECC, and it just fakes the data being erased.
+    // We want to use readStatus here first, because we want to make
+    // it clear to the simulator that we are able to handle unwritten
+    // data.  This only happens on the two status pages, so this
+    // shouldn't be a performance issue.
+    const ultStatus = try self.validMagic(ult);
+    const penultStatus = try self.validMagic(penult);
+
+    if (ultStatus or penultStatus) {
+        return .Request;
+    }
+
+    return .Unknown;
+
+    // if self.area.read(ult << page_shift, std.mem.asBytes(&buf_last));
+    // if self.area.read(penult << page_shift, std.mem.asBytes(&buf_last));
+}
+
+// Try reading the page, and return true if the page has a valid magic
+// number in it.
+fn validMagic(self: *Self, page: usize) !bool {
+    if ((try self.area.getState(page << page_shift)) == .Written) {
+        try self.area.read(page << page_shift, std.mem.asBytes(&self.buf_last));
+
+        return self.buf_last.magic.eql(&page_magic);
+    }
+
+    return false;
+}
+
+test "Status scanning" {
+    var bt = try BootTest.init(testing.allocator, BootTest.lpc55s69);
+    defer bt.deinit();
+
+    var state = try Self.init(try bt.sim.open(1));
+
+    // Before initialization, status should come back
+    var status = try state.scan();
+    try std.testing.expectEqual(Phase.Unknown, status);
+
+    // Write the magic, and make sure the status changes to Request.
+    try state.writeMagic();
+    status = try state.scan();
+    try std.testing.expectEqual(Phase.Request, status);
+}
+
+// Write a magic page to the given area.  This is done in slot 1 to
+// indicate that a swap should be initiated.
+pub fn writeMagic(self: *Self) !void {
+    const ult = (self.area.size >> page_shift) - 1;
+    const penult = ult - 1;
+
+    std.mem.set(u8, std.mem.asBytes(&self.buf_last), 0xFF);
+    self.buf_last.magic = page_magic;
 
     // Erase both pages.
-    try fa.erase(ult << page_shift, page_size);
-    try fa.erase(penult << page_shift, page_size);
+    try self.area.erase(ult << page_shift, page_size);
+    try self.area.erase(penult << page_shift, page_size);
 
-    try fa.write(ult << page_shift, std.mem.asBytes(&buf));
+    try self.area.write(ult << page_shift, std.mem.asBytes(&self.buf_last));
 }
 
 // Write out the initial status page(s) indicating we are starting
@@ -80,7 +147,7 @@ pub fn startStatus(st: *swap_hash.State) !void {
     last.sizes[0] = @intCast(u32, st.sizes[0]);
     last.sizes[1] = @intCast(u32, st.sizes[1]);
     std.mem.copy(u8, last.prefix[0..], st.prefix[0..]);
-    last.phase = .Sliding;
+    last.phase = .Slide;
     last.swap_info = 0;
     last.copy_done = 0;
     last.image_ok = 0;
@@ -186,6 +253,10 @@ const Magic = extern union {
         alignment: u16,
         magic: [14]u8,
     },
+
+    fn eql(self: *const Magic, other: *const Magic) bool {
+        return std.mem.eql(u8, self.val[0..], other.val[0..]);
+    }
 };
 
 // The page based status always uses different magic values.
