@@ -3,6 +3,9 @@
 
 const Self = @This();
 
+// The status area we are currently using.
+area: *sys.flash.FlashArea,
+
 const std = @import("std");
 const sys = @import("../../src/sys.zig");
 
@@ -12,6 +15,84 @@ const swap_hash = @import("../sim/swap-hash.zig");
 const page_size = swap_hash.page_size;
 const page_shift = swap_hash.page_shift;
 const FlashArea = sys.flash.FlashArea;
+
+// Write a magic page to the given area.  This is done in slot 1 to
+// indicate that a swap should be initiated.
+pub fn writeMagic(fa: *sys.flash.FlashArea) !void {
+    const ult = (fa.size >> page_shift) - 1;
+    const penult = ult - 1;
+
+    // TODO: Needs to be target static.
+    var buf: LastPage = undefined;
+    std.mem.set(u8, std.mem.asBytes(&buf), 0xFF);
+    buf.magic = page_magic;
+
+    // Erase both pages.
+    try fa.erase(ult << page_shift, page_size);
+    try fa.erase(penult << page_shift, page_size);
+
+    try fa.write(ult << page_shift, std.mem.asBytes(&buf));
+}
+
+// Write out the initial status page(s) indicating we are starting
+// work.
+pub fn startStatus(st: *swap_hash.State) !void {
+    // Compute how many extra pages are needed.
+    var extras: usize = 0;
+    const total_hashes = asPages(st.sizes[0]) + asPages(st.sizes[1]);
+
+    var last: LastPage = undefined;
+    std.mem.set(u8, std.mem.asBytes(&last), 0xFF);
+
+    var hp: HashPage = undefined;
+
+    if (total_hashes > last.hashes.len) {
+        var remaining = total_hashes - last.hashes.len;
+        while (remaining > 0) {
+            extras += 1;
+            var count = hp.hashes.len;
+            if (count > remaining)
+                count = remaining;
+            remaining -= count;
+        }
+    }
+
+    last.sizes[0] = @intCast(u32, st.sizes[0]);
+    last.sizes[1] = @intCast(u32, st.sizes[1]);
+    std.mem.copy(u8, last.prefix[0..], st.prefix[0..]);
+    last.phase = .Sliding;
+    last.swap_info = 0;
+    last.copy_done = 0;
+    last.image_ok = 0;
+
+    var srcIter = st.iterHashes();
+    var dst: usize = 0;
+    while (dst < last.hashes.len) : (dst += 1) {
+        if (srcIter.next()) |src| {
+            std.mem.copy(u8, last.hashes[dst][0..], src[0..]);
+        } else {
+            break;
+        }
+    }
+
+    // TODO: Write out the other pages.
+
+    const fa = st.areas[1];
+    const ult = (fa.size >> page_shift) - 1;
+    const penult = ult - 1;
+
+    // Update the hash.
+    const lasthash = swap_hash.calcHash(std.mem.asBytes(&last)[0 .. 512 - 20]);
+    std.mem.copy(u8, last.hash[0..], lasthash[0..]);
+    last.magic = page_magic;
+
+    try fa.erase(ult << page_shift, page_size);
+    try fa.erase(penult << page_shift, page_size);
+    try fa.write(ult << page_shift, std.mem.asBytes(&last));
+
+    std.log.info("Writing initial status: {} hash pages", .{total_hashes});
+    std.log.info("2 pages at end + {} extra pages", .{extras});
+}
 
 // Flash layout.
 //
@@ -105,84 +186,6 @@ const Phase = enum(u8) {
     Swapping,
     Done,
 };
-
-// Write a magic page to the given area.  This is done in slot 1 to
-// indicate that a swap should be initiated.
-pub fn writeMagic(fa: *FlashArea) !void {
-    const ult = (fa.size >> page_shift) - 1;
-    const penult = ult - 1;
-
-    // TODO: Needs to be target static.
-    var buf: LastPage = undefined;
-    std.mem.set(u8, std.mem.asBytes(&buf), 0xFF);
-    buf.magic = page_magic;
-
-    // Erase both pages.
-    try fa.erase(ult << page_shift, page_size);
-    try fa.erase(penult << page_shift, page_size);
-
-    try fa.write(ult << page_shift, std.mem.asBytes(&buf));
-}
-
-// Write out the initial status page(s) indicating we are starting
-// work.
-pub fn startStatus(st: *swap_hash.State) !void {
-    // Compute how many extra pages are needed.
-    var extras: usize = 0;
-    const total_hashes = asPages(st.sizes[0]) + asPages(st.sizes[1]);
-
-    var last: LastPage = undefined;
-    std.mem.set(u8, std.mem.asBytes(&last), 0xFF);
-
-    var hp: HashPage = undefined;
-
-    if (total_hashes > last.hashes.len) {
-        var remaining = total_hashes - last.hashes.len;
-        while (remaining > 0) {
-            extras += 1;
-            var count = hp.hashes.len;
-            if (count > remaining)
-                count = remaining;
-            remaining -= count;
-        }
-    }
-
-    last.sizes[0] = @intCast(u32, st.sizes[0]);
-    last.sizes[1] = @intCast(u32, st.sizes[1]);
-    std.mem.copy(u8, last.prefix[0..], st.prefix[0..]);
-    last.phase = .Sliding;
-    last.swap_info = 0;
-    last.copy_done = 0;
-    last.image_ok = 0;
-
-    var srcIter = st.iterHashes();
-    var dst: usize = 0;
-    while (dst < last.hashes.len) : (dst += 1) {
-        if (srcIter.next()) |src| {
-            std.mem.copy(u8, last.hashes[dst][0..], src[0..]);
-        } else {
-            break;
-        }
-    }
-
-    // TODO: Write out the other pages.
-
-    const fa = st.areas[1];
-    const ult = (fa.size >> page_shift) - 1;
-    const penult = ult - 1;
-
-    // Update the hash.
-    const lasthash = swap_hash.calcHash(std.mem.asBytes(&last)[0 .. 512 - 20]);
-    std.mem.copy(u8, last.hash[0..], lasthash[0..]);
-    last.magic = page_magic;
-
-    try fa.erase(ult << page_shift, page_size);
-    try fa.erase(penult << page_shift, page_size);
-    try fa.write(ult << page_shift, std.mem.asBytes(&last));
-
-    std.log.info("Writing initial status: {} hash pages", .{total_hashes});
-    std.log.info("2 pages at end + {} extra pages", .{extras});
-}
 
 fn asPages(value: usize) usize {
     return (value + page_size - 1) >> page_shift;
