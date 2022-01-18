@@ -16,6 +16,26 @@ const page_size = swap_hash.page_size;
 const page_shift = swap_hash.page_shift;
 const FlashArea = sys.flash.FlashArea;
 
+/// The phase of the flash upgrade.
+pub const Phase = enum(u8) {
+    /// An upgrade has been requested.  This is not directly written to
+    /// the status page, but is indicated when the magic value has been
+    /// written with no other data.
+    Request,
+
+    /// Sliding has started or is about to start.  This is the move of
+    /// slot 0 down a single page.
+    Slide,
+
+    /// Swapping has started or is about to start.  This is the
+    /// exchange of the swapped image to the new one.
+    Swap,
+
+    /// Indicates that we have completed everything, the images are
+    /// swapped.
+    Done,
+};
+
 // Write a magic page to the given area.  This is done in slot 1 to
 // indicate that a swap should be initiated.
 pub fn writeMagic(fa: *sys.flash.FlashArea) !void {
@@ -180,12 +200,6 @@ comptime {
     std.debug.assert(@sizeOf(LastPage) == 512);
     std.debug.assert(@sizeOf(HashPage) == 512);
 }
-
-const Phase = enum(u8) {
-    Sliding,
-    Swapping,
-    Done,
-};
 
 fn asPages(value: usize) usize {
     return (value + page_size - 1) >> page_shift;
