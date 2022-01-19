@@ -10,6 +10,8 @@ area: *sys.flash.FlashArea = undefined,
 buf_last: LastPage = undefined,
 buf_hash: HashPage = undefined,
 
+last_seq: u32 = 0,
+
 const std = @import("std");
 const testing = std.testing;
 const sys = @import("../../src/sys.zig");
@@ -163,8 +165,8 @@ test "Status scanning" {
     var bt = try BootTest.init(testing.allocator, BootTest.lpc55s69);
     defer bt.deinit();
 
-    // const sizes = [2]usize{ 112 * page_size + 7, 105 * page_size + page_size - 1 });
-    const sizes = [2]usize{ 17 * page_size + 7, 14 * page_size + page_size - 1 };
+    const sizes = [2]usize{ 112 * page_size + 7, 105 * page_size + page_size - 1 };
+    // const sizes = [2]usize{ 17 * page_size + 7, 14 * page_size + page_size - 1 };
 
     var state = try Self.init(try bt.sim.open(1));
 
@@ -185,7 +187,7 @@ test "Status scanning" {
     // We need to fill in enough to make this work.
     swap.areas[0] = try bt.sim.open(0);
     swap.areas[1] = try bt.sim.open(1);
-    try startStatus(&swap);
+    try state.startStatus(&swap);
 
     try swap.areas[0].save("status-scan0.bin");
     try swap.areas[1].save("status-scan1.bin");
@@ -220,7 +222,7 @@ pub fn writeMagic(self: *Self) !void {
 
 // Write out the initial status page(s) indicating we are starting
 // work.
-pub fn startStatus(st: *swap_hash.State) !void {
+pub fn startStatus(self: *Self, st: *swap_hash.State) !void {
     // Compute how many extra pages are needed.
     var extras: usize = 0;
     const total_hashes = asPages(st.sizes[0]) + asPages(st.sizes[1]);
@@ -229,18 +231,60 @@ pub fn startStatus(st: *swap_hash.State) !void {
     var last: LastPage = undefined;
     std.mem.set(u8, std.mem.asBytes(&last), 0xFF);
 
-    var hp: HashPage = undefined;
+    const fa = st.areas[1];
+    const ult = (fa.size >> page_shift) - 1;
+    const penult = ult - 1;
 
     if (total_hashes > last.hashes.len) {
         var remaining = total_hashes - last.hashes.len;
         while (remaining > 0) {
             extras += 1;
-            var count = hp.hashes.len;
+            var count = self.buf_hash.hashes.len;
             if (count > remaining)
                 count = remaining;
             remaining -= count;
         }
     }
+
+    // The ordering/layout of the hash pages is a little "weird" but
+    // designed to be simplier to write and read.  The hashes are
+    // written starting with the first hash page, then decrementing
+    // through memory, with the final remaining pieces in the 'last'
+    // page.
+    //
+    // The hash pages need to be written first, because the recover
+    // code assumes that if the lastpage is readable, the hashes have
+    // already been written.
+    var srcIter = st.iterHashes();
+    var dst: usize = 0;
+    const old_extras = extras;
+    var hash_page = penult - 1;
+    while (extras > 0) : (extras -= 1) {
+        std.mem.set(u8, std.mem.asBytes(&self.buf_hash), 0);
+
+        dst = 0;
+        while (dst < self.buf_hash.hashes.len) : (dst += 1) {
+            if (srcIter.next()) |src| {
+                self.buf_hash.hashes[dst] = src.*;
+
+                // const srcv = std.mem.bytesToValue(u32, src[0..]);
+                // std.log.warn("Write {x:0>8} to page:{} at {}", .{ srcv, hash_page, dst });
+            } else {
+                // Math above was incorrect.
+                unreachable;
+            }
+        }
+
+        // Update the hash.
+        const thehash = swap_hash.calcHash(std.mem.asBytes(&self.buf_hash)[0 .. 512 - 4]);
+        std.mem.copy(u8, self.buf_hash.hash[0..], thehash[0..]);
+
+        try fa.erase(hash_page << page_shift, page_size);
+        try fa.write(hash_page << page_shift, std.mem.asBytes(&self.buf_hash));
+
+        hash_page -= 1;
+    }
+    extras = old_extras;
 
     last.sizes[0] = @intCast(u32, st.sizes[0]);
     last.sizes[1] = @intCast(u32, st.sizes[1]);
@@ -251,8 +295,7 @@ pub fn startStatus(st: *swap_hash.State) !void {
     last.image_ok = 0;
     last.seq = 1;
 
-    var srcIter = st.iterHashes();
-    var dst: usize = 0;
+    dst = 0;
     while (dst < last.hashes.len) : (dst += 1) {
         if (srcIter.next()) |src| {
             std.mem.copy(u8, last.hashes[dst][0..], src[0..]);
@@ -262,10 +305,6 @@ pub fn startStatus(st: *swap_hash.State) !void {
     }
 
     // TODO: Write out the other pages.
-
-    const fa = st.areas[1];
-    const ult = (fa.size >> page_shift) - 1;
-    const penult = ult - 1;
 
     // Update the hash.
     const lasthash = swap_hash.calcHash(std.mem.asBytes(&last)[0 .. 512 - 20]);
@@ -303,9 +342,42 @@ pub fn loadStatus(self: *Self, st: *swap_hash.State) !void {
         }
     }
 
-    // Extract the hashes.
+    // Load the extras pages to get our hashes.
     var src: usize = 0;
     var dstIter = st.iterHashes();
+
+    const fa = st.areas[1]; // TODO: This really should be from 0.
+    var hash_page = (fa.size >> page_shift) - 3;
+
+    // Replicate the behavior from the load.  Hash failures here are
+    // not easily recoverable.
+    while (extras > 0) : (extras -= 1) {
+        try fa.read(hash_page << page_shift, std.mem.asBytes(&self.buf_hash));
+
+        // Verify the hash.
+        const thehash = swap_hash.calcHash(std.mem.asBytes(&self.buf_hash)[0 .. 512 - 4]);
+        if (!std.mem.eql(u8, self.buf_hash.hash[0..], thehash[0..])) {
+            std.log.err("Hash failure on hash page", .{});
+            @panic("Unrecoverable error");
+        }
+
+        // Copy the pages out.
+        src = 0;
+        while (src < self.buf_hash.hashes.len) : (src += 1) {
+            if (dstIter.next()) |dst| {
+                std.mem.copy(u8, dst[0..], self.buf_hash.hashes[src][0..]);
+
+                // const dstv = std.mem.bytesToValue(u32, dst[0..]);
+                // std.log.warn("Read {x:0>8} from page:{} at {}", .{ dstv, hash_page, src });
+            } else {
+                // Calculations above were incorrect.
+                unreachable;
+            }
+        }
+    }
+
+    // Extract the hashes.
+    src = 0;
     while (src < self.buf_last.hashes.len) : (src += 1) {
         if (dstIter.next()) |dst| {
             std.mem.copy(u8, dst[0..], self.buf_last.hashes[src][0..]);
@@ -313,8 +385,6 @@ pub fn loadStatus(self: *Self, st: *swap_hash.State) !void {
             break;
         }
     }
-
-    // TODO: Read in the other pages.
 }
 
 // Flash layout.
