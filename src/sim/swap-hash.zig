@@ -285,23 +285,75 @@ pub const State = struct {
     }
 
     // Return an iterator over all of the hashes.
-    pub fn iterHashes(self: *const Self) HashIter {
+    pub fn iterHashes(self: *Self) HashIter {
         return .{
             .state = self,
             .phase = 0,
             .pos = 0,
         };
     }
+
+    // For testing, set 'sizes' and fill in some hashes for the given
+    // image "sizes".
+    pub fn fakeHashes(self: *Self, sizes: [2]usize) !void {
+        self.sizes = sizes;
+
+        self.prefix = [4]u8{ 1, 2, 3, 4 };
+
+        var slot: usize = 0;
+
+        while (slot < 2) : (slot += 1) {
+            var pos: usize = 0;
+            var page: usize = 0;
+            while (pos < self.sizes[slot]) : (pos += page_size) {
+                var hh = Sha256.init(.{});
+                hh.update(self.prefix[0..]);
+                const num: usize = slot * max_pages * page_size + pos;
+                hh.update(std.mem.asBytes(&num));
+                var hash: [32]u8 = undefined; // TODO: magic number
+                hh.final(hash[0..]);
+                std.mem.copy(u8, self.hashes[slot][page][0..], hash[0..hash_bytes]);
+                // std.log.warn("hash: {} 0x{any}", .{ page, self.hashes[slot][page] });
+
+                page += 1;
+            }
+        }
+    }
+
+    // For testing, compare the generated sizes and hashes to make
+    // sure they have been recovered correctly.
+    pub fn checkFakeHashes(self: *Self, sizes: [2]usize) !void {
+        try std.testing.expectEqualSlices(usize, sizes[0..], self.sizes[0..]);
+        try std.testing.expectEqual([4]u8{ 1, 2, 3, 4 }, self.prefix);
+
+        var slot: usize = 0;
+        while (slot < 2) : (slot += 1) {
+            var pos: usize = 0;
+            var page: usize = 0;
+            while (pos < self.sizes[slot]) : (pos += page_size) {
+                var hh = Sha256.init(.{});
+                hh.update(self.prefix[0..]);
+                const num: usize = slot * max_pages * page_size + pos;
+                hh.update(std.mem.asBytes(&num));
+                var hash: [32]u8 = undefined;
+                hh.final(hash[0..]);
+                // std.log.warn("Checking: {} in slot {}", .{ page, slot });
+                try std.testing.expectEqualSlices(u8, hash[0..hash_bytes], self.hashes[slot][page][0..]);
+
+                page += 1;
+            }
+        }
+    }
 };
 
 pub const HashIter = struct {
     const Self = @This();
 
-    state: *const State,
+    state: *State,
     phase: usize,
     pos: usize,
 
-    pub fn next(self: *Self) ?*const [hash_bytes]u8 {
+    pub fn next(self: *Self) ?*[hash_bytes]u8 {
         while (true) {
             if (self.phase >= 2)
                 return null;

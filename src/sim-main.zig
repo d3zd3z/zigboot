@@ -33,7 +33,8 @@ pub fn main() !void {
     try sim.verifyImages(.{ sizeB, sizeA });
 
     var fa = try sim.open(0);
-    try status.writeMagic(fa);
+    var stat = try status.init(fa);
+    try status.writeMagic(&stat);
     try fa.save("flash-0.bin");
 
     var fb = try sim.open(1);

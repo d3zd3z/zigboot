@@ -67,11 +67,67 @@ pub fn scan(self: *Self) !Phase {
     const ultStatus = try self.validMagic(ult);
     const penultStatus = try self.validMagic(penult);
 
-    if (ultStatus or penultStatus) {
-        return .Request;
+    // If neither area is readable, then we know we don't have any
+    // data.
+    if (!ultStatus and !penultStatus) {
+        return .Unknown;
     }
 
-    return .Unknown;
+    // Try reading the ultimate buffer (last page).
+    var ultSeq: ?u32 = null;
+    var penultSeq: ?u32 = null;
+    if (ultStatus) {
+        ultSeq = try self.validLast(ult);
+    }
+    if (penultStatus) {
+        penultSeq = try self.validLast(penult);
+    }
+
+    // There are 4 combinations of the sequences being valid.
+    var valid = false;
+    if (ultSeq) |useq| {
+        if (penultSeq) |puseq| {
+            // Both are valid.  We should go with the earlier one.
+            // The last read was of the penult one, so if the latest
+            // one is newer, go back and reread the ultimate one.
+            if (useq < puseq) {
+                if ((try self.validLast(ult)) == null) {
+                    // This should probably be checked, and just
+                    // abort, it would indicate we couldn't read this
+                    // data a second time.
+                    unreachable;
+                }
+            }
+
+            // The buf_last is now the current version of the last
+            // data.
+            valid = true;
+        } else {
+            // The ultimate one is valid, but we overwrote the buffer
+            // when we read the penult.
+            if (penultStatus) {
+                if ((try self.validLast(ult)) == null) {
+                    unreachable;
+                }
+            }
+            valid = true;
+        }
+    } else {
+        if (penultSeq) |_| {
+            // The penultimate buffer is the only valid one, so just
+            // use it.
+            valid = true;
+        } else {
+            // Nothing is valid.
+        }
+    }
+
+    if (valid) {
+        return self.buf_last.phase;
+    }
+
+    // Otherwise, we have magic, but no valid state.
+    return .Request;
 
     // if self.area.read(ult << page_shift, std.mem.asBytes(&buf_last));
     // if self.area.read(penult << page_shift, std.mem.asBytes(&buf_last));
@@ -81,6 +137,7 @@ pub fn scan(self: *Self) !Phase {
 // number in it.
 fn validMagic(self: *Self, page: usize) !bool {
     if ((try self.area.getState(page << page_shift)) == .Written) {
+        // TODO: Only really need to try reading the magic.
         try self.area.read(page << page_shift, std.mem.asBytes(&self.buf_last));
 
         return self.buf_last.magic.eql(&page_magic);
@@ -89,9 +146,25 @@ fn validMagic(self: *Self, page: usize) !bool {
     return false;
 }
 
+// Try reading the given page into the last buffer, and return its
+// sequence number if the hash indicates it is valid.
+fn validLast(self: *Self, page: usize) !?u32 {
+    try self.area.read(page << page_shift, std.mem.asBytes(&self.buf_last));
+
+    const hash = swap_hash.calcHash(std.mem.asBytes(&self.buf_last)[0 .. 512 - 20]);
+    if (std.mem.eql(u8, self.buf_last.hash[0..], hash[0..])) {
+        return self.buf_last.seq;
+    } else {
+        return null;
+    }
+}
+
 test "Status scanning" {
     var bt = try BootTest.init(testing.allocator, BootTest.lpc55s69);
     defer bt.deinit();
+
+    // const sizes = [2]usize{ 112 * page_size + 7, 105 * page_size + page_size - 1 });
+    const sizes = [2]usize{ 17 * page_size + 7, 14 * page_size + page_size - 1 };
 
     var state = try Self.init(try bt.sim.open(1));
 
@@ -103,6 +176,30 @@ test "Status scanning" {
     try state.writeMagic();
     status = try state.scan();
     try std.testing.expectEqual(Phase.Request, status);
+
+    // Do a status write.  This should go into slot 0.
+    var swap: swap_hash.State = undefined;
+    try swap.fakeHashes(sizes);
+
+    // Write this out.
+    // We need to fill in enough to make this work.
+    swap.areas[0] = try bt.sim.open(0);
+    swap.areas[1] = try bt.sim.open(1);
+    try startStatus(&swap);
+
+    try swap.areas[0].save("status-scan0.bin");
+    try swap.areas[1].save("status-scan1.bin");
+
+    // Blow away the memory structure.
+    std.mem.set(u8, std.mem.asBytes(&swap), 0xAA);
+    swap.areas[0] = try bt.sim.open(0);
+    swap.areas[1] = try bt.sim.open(1);
+
+    const ph = try state.scan();
+    try std.testing.expectEqual(Phase.Slide, ph);
+    try state.loadStatus(&swap);
+
+    try swap.checkFakeHashes(sizes);
 }
 
 // Write a magic page to the given area.  This is done in slot 1 to
@@ -128,6 +225,7 @@ pub fn startStatus(st: *swap_hash.State) !void {
     var extras: usize = 0;
     const total_hashes = asPages(st.sizes[0]) + asPages(st.sizes[1]);
 
+    // TODO: Use buf_last
     var last: LastPage = undefined;
     std.mem.set(u8, std.mem.asBytes(&last), 0xFF);
 
@@ -151,6 +249,7 @@ pub fn startStatus(st: *swap_hash.State) !void {
     last.swap_info = 0;
     last.copy_done = 0;
     last.image_ok = 0;
+    last.seq = 1;
 
     var srcIter = st.iterHashes();
     var dst: usize = 0;
@@ -179,6 +278,43 @@ pub fn startStatus(st: *swap_hash.State) !void {
 
     std.log.info("Writing initial status: {} hash pages", .{total_hashes});
     std.log.info("2 pages at end + {} extra pages", .{extras});
+}
+
+// Assuming that the buf_last has been loaded with the correct image
+// of the last page, update the swap_status structure with the sizes
+// and hash information from the in-progress operation.
+pub fn loadStatus(self: *Self, st: *swap_hash.State) !void {
+    st.sizes[0] = @as(usize, self.buf_last.sizes[0]);
+    st.sizes[1] = @as(usize, self.buf_last.sizes[1]);
+    st.prefix = self.buf_last.prefix;
+
+    // TODO: Consolidate this from the startStatus function.
+    var extras: usize = 0;
+    const total_hashes = asPages(st.sizes[0]) + asPages(st.sizes[1]);
+
+    if (total_hashes > self.buf_last.hashes.len) {
+        var remaining = total_hashes - self.buf_last.hashes.len;
+        while (remaining > 0) {
+            extras += 1;
+            var count = self.buf_hash.hashes.len;
+            if (count > remaining)
+                count = remaining;
+            remaining -= count;
+        }
+    }
+
+    // Extract the hashes.
+    var src: usize = 0;
+    var dstIter = st.iterHashes();
+    while (src < self.buf_last.hashes.len) : (src += 1) {
+        if (dstIter.next()) |dst| {
+            std.mem.copy(u8, dst[0..], self.buf_last.hashes[src][0..]);
+        } else {
+            break;
+        }
+    }
+
+    // TODO: Read in the other pages.
 }
 
 // Flash layout.
