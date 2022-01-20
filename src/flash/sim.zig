@@ -24,21 +24,25 @@ pub const SimFlash = struct {
     allocator: mem.Allocator,
     areas: []FlashArea,
 
-    counter: Counter,
+    counter: *Counter,
 
     /// Construct a new flash simulator.  There will be two areas
     /// created, the first will be one sector larger than the other.
     /// TODO: Add support for 4 regions with upgrades.
     pub fn init(allocator: mem.Allocator, sector_size: usize, sectors: usize) !SimFlash {
+        var counter = try allocator.create(Counter);
+        counter.* = Counter.init(null);
+        errdefer allocator.destroy(counter);
+
         var base: usize = 128 * 1024;
-        var primary = try FlashArea.init(allocator, .{
+        var primary = try FlashArea.init(allocator, counter, .{
             .base = base,
             .sectors = sectors + 1,
             .sector_size = sector_size,
         });
         errdefer primary.deinit();
         base += (sectors + 1) * sector_size;
-        var secondary = try FlashArea.init(allocator, .{
+        var secondary = try FlashArea.init(allocator, counter, .{
             .base = base,
             .sectors = sectors,
             .sector_size = sector_size,
@@ -47,10 +51,11 @@ pub const SimFlash = struct {
         var areas = try allocator.alloc(FlashArea, 2);
         areas[0] = primary;
         areas[1] = secondary;
+
         return Self{
             .allocator = allocator,
             .areas = areas,
-            .counter = Counter.init(null),
+            .counter = counter,
         };
     }
 
@@ -59,6 +64,7 @@ pub const SimFlash = struct {
             area.deinit();
         }
         self.allocator.free(self.areas);
+        self.allocator.destroy(self.counter);
     }
 
     /// Open the given numbered area.
@@ -140,13 +146,16 @@ pub const FlashArea = struct {
     data: []u8,
     state: []State,
 
+    // The parent sim.
+    counter: *Counter,
+
     pub const AreaInit = struct {
         base: usize,
         sectors: usize,
         sector_size: usize,
     };
 
-    pub fn init(allocator: mem.Allocator, info: AreaInit) !FlashArea {
+    pub fn init(allocator: mem.Allocator, counter: *Counter, info: AreaInit) !FlashArea {
         std.debug.assert(std.math.isPowerOfTwo(info.sector_size));
         const log2 = std.math.log2_int(usize, info.sector_size);
 
@@ -161,6 +170,7 @@ pub const FlashArea = struct {
             .allocator = allocator,
             .log2_ssize = log2,
             .size = info.sectors * info.sector_size,
+            .counter = counter,
         };
     }
 
@@ -215,7 +225,7 @@ pub const FlashArea = struct {
             self.state[page] = .Unsafe;
             mem.set(u8, self.data[page << self.log2_ssize .. (page + 1) << self.log2_ssize], 0xFF);
 
-            // TODO: Interrupt check
+            try self.counter.act();
 
             self.state[page] = .Erased;
 
@@ -249,7 +259,7 @@ pub const FlashArea = struct {
         self.state[page] = .Unwritten;
         mem.copy(u8, self.data[off .. off + self.sector_size], buf);
 
-        // TODO: Interrupt check
+        try self.counter.act();
 
         self.state[page] = .Written;
     }
