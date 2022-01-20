@@ -6,7 +6,7 @@ const builtin = @import("builtin");
 const sys = @import("sys.zig");
 const status = @import("status.zig");
 const SimFlash = sys.flash.SimFlash;
-const SwapState = @import("sim/swap-hash.zig").State;
+const Swap = @import("swap.zig").Swap;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -23,27 +23,31 @@ pub fn main() !void {
     // const sizeB = 512 * 5 + 104;
     try sim.installImages(.{ sizeA, sizeB });
 
-    var sstate = try SwapState.init(&sim, sizeA, sizeB, 1);
+    var sstate = try Swap.init(&sim, .{ sizeA, sizeB }, 1);
     var fa = try sim.open(0);
     var stat = try status.init(fa);
 
-    try sstate.computeHashes();
-    try sstate.workSlide0();
-    try sstate.workSwap();
-    try stat.startStatus(&sstate);
-    try sstate.performWork();
+    _ = sstate;
+    _ = stat;
 
-    try sim.verifyImages(.{ sizeB, sizeA });
+    //try sstate.computeHashes();
+    //try sstate.workSlide0();
+    //try sstate.workSwap();
+    //try stat.startStatus(&sstate);
+    //try sstate.performWork();
 
-    try status.writeMagic(&stat);
-    try fa.save("flash-0.bin");
+    //try sim.verifyImages(.{ sizeB, sizeA });
 
-    var fb = try sim.open(1);
-    try fb.save("flash-1.bin");
+    //try status.writeMagic(&stat);
+    //try fa.save("flash-0.bin");
+
+    //var fb = try sim.open(1);
+    //try fb.save("flash-1.bin");
 }
 
 test {
     _ = @import("sys.zig");
     _ = @import("flash.zig");
     _ = @import("status.zig");
+    _ = @import("swap.zig");
 }

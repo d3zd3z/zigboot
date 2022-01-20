@@ -18,10 +18,11 @@ const sys = @import("../../src/sys.zig");
 const BootTest = @import("../test.zig").BootTest;
 
 // TODO: This should be configured, not pulled from the swap code.
-const swap_hash = @import("../sim/swap-hash.zig");
+// const swap_hash = @import("../sim/swap-hash.zig");
+const Swap = @import("../swap.zig").Swap;
 
-const page_size = swap_hash.page_size;
-const page_shift = swap_hash.page_shift;
+const page_size = Swap.page_size;
+const page_shift = Swap.page_shift;
 const FlashArea = sys.flash.FlashArea;
 
 /// The phase of the flash upgrade.
@@ -153,7 +154,7 @@ fn validMagic(self: *Self, page: usize) !bool {
 fn validLast(self: *Self, page: usize) !?u32 {
     try self.area.read(page << page_shift, std.mem.asBytes(&self.buf_last));
 
-    const hash = swap_hash.calcHash(std.mem.asBytes(&self.buf_last)[0 .. 512 - 20]);
+    const hash = Swap.calcHash(std.mem.asBytes(&self.buf_last)[0 .. 512 - 20]);
     if (std.mem.eql(u8, self.buf_last.hash[0..], hash[0..])) {
         return self.buf_last.seq;
     } else {
@@ -180,7 +181,7 @@ test "Status scanning" {
     try std.testing.expectEqual(Phase.Request, status);
 
     // Do a status write.  This should go into slot 0.
-    var swap: swap_hash.State = undefined;
+    var swap: Swap = undefined;
     try swap.fakeHashes(sizes);
 
     // Write this out.
@@ -222,7 +223,7 @@ pub fn writeMagic(self: *Self) !void {
 
 // Write out the initial status page(s) indicating we are starting
 // work.
-pub fn startStatus(self: *Self, st: *swap_hash.State) !void {
+pub fn startStatus(self: *Self, st: *Swap) !void {
     // Compute how many extra pages are needed.
     var extras: usize = 0;
     const total_hashes = asPages(st.sizes[0]) + asPages(st.sizes[1]);
@@ -276,7 +277,7 @@ pub fn startStatus(self: *Self, st: *swap_hash.State) !void {
         }
 
         // Update the hash.
-        const thehash = swap_hash.calcHash(std.mem.asBytes(&self.buf_hash)[0 .. 512 - 4]);
+        const thehash = Swap.calcHash(std.mem.asBytes(&self.buf_hash)[0 .. 512 - 4]);
         std.mem.copy(u8, self.buf_hash.hash[0..], thehash[0..]);
 
         try fa.erase(hash_page << page_shift, page_size);
@@ -307,7 +308,7 @@ pub fn startStatus(self: *Self, st: *swap_hash.State) !void {
     // TODO: Write out the other pages.
 
     // Update the hash.
-    const lasthash = swap_hash.calcHash(std.mem.asBytes(&last)[0 .. 512 - 20]);
+    const lasthash = Swap.calcHash(std.mem.asBytes(&last)[0 .. 512 - 20]);
     std.mem.copy(u8, last.hash[0..], lasthash[0..]);
     last.magic = page_magic;
 
@@ -322,7 +323,7 @@ pub fn startStatus(self: *Self, st: *swap_hash.State) !void {
 // Assuming that the buf_last has been loaded with the correct image
 // of the last page, update the swap_status structure with the sizes
 // and hash information from the in-progress operation.
-pub fn loadStatus(self: *Self, st: *swap_hash.State) !void {
+pub fn loadStatus(self: *Self, st: *Swap) !void {
     st.sizes[0] = @as(usize, self.buf_last.sizes[0]);
     st.sizes[1] = @as(usize, self.buf_last.sizes[1]);
     st.prefix = self.buf_last.prefix;
@@ -355,7 +356,7 @@ pub fn loadStatus(self: *Self, st: *swap_hash.State) !void {
         try fa.read(hash_page << page_shift, std.mem.asBytes(&self.buf_hash));
 
         // Verify the hash.
-        const thehash = swap_hash.calcHash(std.mem.asBytes(&self.buf_hash)[0 .. 512 - 4]);
+        const thehash = Swap.calcHash(std.mem.asBytes(&self.buf_hash)[0 .. 512 - 4]);
         if (!std.mem.eql(u8, self.buf_hash.hash[0..], thehash[0..])) {
             std.log.err("Hash failure on hash page", .{});
             @panic("Unrecoverable error");
@@ -412,7 +413,7 @@ pub fn loadStatus(self: *Self, st: *swap_hash.State) !void {
 // data, beyond normal CPU alignment issues.
 const LastPage = extern struct {
     // The first block of hashes
-    hashes: [(512 - 72) / 4][swap_hash.hash_bytes]u8,
+    hashes: [(512 - 72) / 4][Swap.hash_bytes]u8,
 
     // The sizes of the two regions (in bytes) used for swap.
     sizes: [2]u32,
@@ -443,7 +444,7 @@ const LastPage = extern struct {
 // Pages before these two are used to hold any additional hashes.
 const HashPage = extern struct {
     // As many hashes as we need.
-    hashes: [(512 - 4) / 4][swap_hash.hash_bytes]u8,
+    hashes: [(512 - 4) / 4][Swap.hash_bytes]u8,
 
     // The first 4 bytes of the SHA1 hash of the hashes array before
     // this.

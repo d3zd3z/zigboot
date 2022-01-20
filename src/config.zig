@@ -30,3 +30,6 @@ pub const status: StatusMode = .Paged;
 /// This is historically 8, which is needed to maintain compatibility
 /// with the current magic values.
 pub const max_device_alignment = 8;
+
+/// The largest number of pages occupied by an image.
+pub const max_pages = 1024;

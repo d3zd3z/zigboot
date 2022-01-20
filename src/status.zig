@@ -7,7 +7,7 @@
 
 const config = @import("config.zig");
 
-const Self = switch (config.status) {
+pub const Self = switch (config.status) {
     .Paged => @import("status/paged.zig"),
     .InPlace => @import("status/inplace.zig"),
 };
@@ -19,9 +19,9 @@ const testPower = struct {
     const testing = std.testing;
     const BootTest = @import("test.zig").BootTest;
 
-    const swap_hash = @import("sim/swap-hash.zig");
+    const Swap = @import("swap.zig").Swap;
 
-    const page_size = swap_hash.page_size;
+    const page_size = Swap.page_size;
 
     const sizes = [2]usize{ 112 * page_size + 7, 105 * page_size + page_size - 1 };
 
@@ -31,7 +31,7 @@ const testPower = struct {
 
         var state = try Self.init(try bt.sim.open(1));
 
-        var swap: swap_hash.State = undefined;
+        var swap: Swap = undefined;
         try swap.fakeHashes(sizes);
 
         // Write this out.
