@@ -24,16 +24,17 @@ pub fn main() !void {
     try sim.installImages(.{ sizeA, sizeB });
 
     var sstate = try SwapState.init(&sim, sizeA, sizeB, 1);
+    var fa = try sim.open(0);
+    var stat = try status.init(fa);
+
     try sstate.computeHashes();
     try sstate.workSlide0();
     try sstate.workSwap();
-    try status.startStatus(&sstate);
+    try stat.startStatus(&sstate);
     try sstate.performWork();
 
     try sim.verifyImages(.{ sizeB, sizeA });
 
-    var fa = try sim.open(0);
-    var stat = try status.init(fa);
     try status.writeMagic(&stat);
     try fa.save("flash-0.bin");
 
