@@ -81,6 +81,10 @@ pub const Swap = struct {
             // Write this status out, which should move us on to the
             // first phase.
             try self.status[0].startStatus(self);
+        } else if (st1 == .Request and (st0 == .Slide or st0 == .Swap)) {
+            // The swap operation was interrupted, load the status so
+            // that we can then try to recover where we left off.
+            try self.status[0].loadStatus(self);
         } else {
             std.log.err("Unsupport status config {},{}", .{ st0, st1 });
         }
@@ -218,17 +222,35 @@ test "Swap recovery" {
     // These are just sizes we will use for testing.
     const sizes = [2]usize{ 112 * Swap.page_size + 7, 105 * Swap.page_size + Swap.page_size - 1 };
 
-    // Fill in the images.
-    try bt.sim.installImages(sizes);
+    var limit: usize = 1;
 
-    var swap = try Swap.init(&bt.sim, sizes, 1);
+    while (true) : (limit += 1) {
+        // Fill in the images.
+        try bt.sim.installImages(sizes);
 
-    // Writing the magic to slot 1 initiates an upgrade.
-    try swap.status[1].writeMagic();
+        var swap = try Swap.init(&bt.sim, sizes, 1);
 
-    // Try the normal startup.
-    // TODO: Handle hash collision, restarting as appropriate.
-    try swap.startup();
+        // Writing the magic to slot 1 initiates an upgrade.
+        try swap.status[1].writeMagic();
+
+        // Set our limit, stopping after that many flash steps.
+        bt.sim.counter.reset();
+        try bt.sim.counter.setLimit(limit);
+
+        // TODO: Handle hash collision, restarting as appropriate.
+        if (swap.startup()) |_| {
+            break;
+        } else |err| {
+            if (err != error.Expired)
+                return err;
+        }
+
+        // Retry the startup, as if we reached a fresh start.
+        bt.sim.counter.reset();
+        swap = try Swap.init(&bt.sim, sizes, 1);
+
+        try swap.startup();
+    }
 
     // Write out the swap status.
     try (try bt.sim.open(0)).save("swap-0.bin");

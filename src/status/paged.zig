@@ -141,9 +141,15 @@ pub fn scan(self: *Self) !Phase {
 fn validMagic(self: *Self, page: usize) !bool {
     if ((try self.area.getState(page << page_shift)) == .Written) {
         // TODO: Only really need to try reading the magic.
-        try self.area.read(page << page_shift, std.mem.asBytes(&self.buf_last));
-
-        return self.buf_last.magic.eql(&page_magic);
+        // This read can fail, either if the device has ECC, or we are
+        // in the simulator.
+        if (self.area.read(page << page_shift, std.mem.asBytes(&self.buf_last))) |_| {
+            return self.buf_last.magic.eql(&page_magic);
+        } else |err| {
+            if (err != error.ReadUnwritten)
+                return err;
+            return false;
+        }
     }
 
     return false;
@@ -232,8 +238,7 @@ pub fn startStatus(self: *Self, st: *Swap) !void {
     var last: LastPage = undefined;
     std.mem.set(u8, std.mem.asBytes(&last), 0xFF);
 
-    const fa = st.areas[1];
-    const ult = (fa.size >> page_shift) - 1;
+    const ult = (self.area.size >> page_shift) - 1;
     const penult = ult - 1;
 
     if (total_hashes > last.hashes.len) {
@@ -280,8 +285,8 @@ pub fn startStatus(self: *Self, st: *Swap) !void {
         const thehash = Swap.calcHash(std.mem.asBytes(&self.buf_hash)[0 .. 512 - 4]);
         std.mem.copy(u8, self.buf_hash.hash[0..], thehash[0..]);
 
-        try fa.erase(hash_page << page_shift, page_size);
-        try fa.write(hash_page << page_shift, std.mem.asBytes(&self.buf_hash));
+        try self.area.erase(hash_page << page_shift, page_size);
+        try self.area.write(hash_page << page_shift, std.mem.asBytes(&self.buf_hash));
 
         hash_page -= 1;
     }
@@ -312,9 +317,9 @@ pub fn startStatus(self: *Self, st: *Swap) !void {
     std.mem.copy(u8, last.hash[0..], lasthash[0..]);
     last.magic = page_magic;
 
-    try fa.erase(ult << page_shift, page_size);
-    try fa.erase(penult << page_shift, page_size);
-    try fa.write(ult << page_shift, std.mem.asBytes(&last));
+    try self.area.erase(ult << page_shift, page_size);
+    try self.area.erase(penult << page_shift, page_size);
+    try self.area.write(ult << page_shift, std.mem.asBytes(&last));
 
     std.log.info("Writing initial status: {} hash pages", .{total_hashes});
     std.log.info("2 pages at end + {} extra pages", .{extras});
@@ -347,13 +352,12 @@ pub fn loadStatus(self: *Self, st: *Swap) !void {
     var src: usize = 0;
     var dstIter = st.iterHashes();
 
-    const fa = st.areas[1]; // TODO: This really should be from 0.
-    var hash_page = (fa.size >> page_shift) - 3;
+    var hash_page = (self.area.size >> page_shift) - 3;
 
     // Replicate the behavior from the load.  Hash failures here are
     // not easily recoverable.
     while (extras > 0) : (extras -= 1) {
-        try fa.read(hash_page << page_shift, std.mem.asBytes(&self.buf_hash));
+        try self.area.read(hash_page << page_shift, std.mem.asBytes(&self.buf_hash));
 
         // Verify the hash.
         const thehash = Swap.calcHash(std.mem.asBytes(&self.buf_hash)[0 .. 512 - 4]);

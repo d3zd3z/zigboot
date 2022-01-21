@@ -84,12 +84,11 @@ pub const SimFlash = struct {
 
         for (sizes) |size, id| {
             var area = try self.open(@intCast(u8, id));
+            area.reset();
 
             var pos: usize = 0;
             while (pos < size) {
-                var count = size - pos;
-                if (count > page_size)
-                    count = page_size;
+                const count = std.math.min(size - pos, page_size);
 
                 // Generate some random data.
                 std.mem.set(u8, buf[0..], 0xFF);
@@ -172,6 +171,13 @@ pub const FlashArea = struct {
             .size = info.sectors * info.sector_size,
             .counter = counter,
         };
+    }
+
+    /// Reset the simulated flash to an uninitialized state.
+    pub fn reset(self: *Self) void {
+        mem.set(State, self.state, .Unsafe);
+        mem.set(u8, self.data, 0xAA);
+        self.counter.reset();
     }
 
     pub fn deinit(self: *Self) void {
@@ -328,6 +334,7 @@ pub const Counter = struct {
     // Reset the current count.
     pub fn reset(self: *Self) void {
         self.current = 0;
+        self.limit = null;
     }
 
     // Perform an action.  Bumps the counter, if possible.  If
