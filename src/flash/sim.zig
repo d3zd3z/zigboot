@@ -94,6 +94,7 @@ pub const SimFlash = struct {
                 std.mem.set(u8, buf[0..], 0xFF);
                 fillBuf(buf[0..count], id * max_pages + pos);
 
+                // std.log.warn("Write slot {}, page {} (size {})", .{ id, pos / page_size, size });
                 try area.erase(pos, page_size);
                 try area.write(pos, buf[0..]);
 
