@@ -69,6 +69,7 @@ pub fn scan(self: *Self) !Phase {
     // shouldn't be a performance issue.
     const ultStatus = try self.validMagic(ult);
     const penultStatus = try self.validMagic(penult);
+    std.log.info("ult: {}, penult: {}", .{ ultStatus, penultStatus });
 
     // If neither area is readable, then we know we don't have any
     // data.
@@ -161,9 +162,16 @@ fn validLast(self: *Self, page: usize) !?u32 {
     try self.area.read(page << page_shift, std.mem.asBytes(&self.buf_last));
 
     const hash = Swap.calcHash(std.mem.asBytes(&self.buf_last)[0 .. 512 - 20]);
+    std.log.info("validLast (page {}): {s} and {s}", .{
+        page,
+        std.fmt.fmtSliceHexLower(hash[0..]),
+        std.fmt.fmtSliceHexLower(self.buf_last.hash[0..]),
+    });
     if (std.mem.eql(u8, self.buf_last.hash[0..], hash[0..])) {
+        std.log.info("valid last: {}", .{self.buf_last.seq});
         return self.buf_last.seq;
     } else {
+        std.log.info("invalid last", .{});
         return null;
     }
 }

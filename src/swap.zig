@@ -97,11 +97,20 @@ pub const Swap = struct {
             return error.StateError;
         }
 
+        std.log.warn("Recover at state: {}", .{st0});
+
         // Build the work data.
         try self.workSlide0();
         try self.workSwap();
 
+        // If we didn't just start from "Request", we need to recover
+        // our state.
+        if (st0 == .Slide or st0 == .Swap) {
+            @panic("TODO");
+        }
+
         // TODO: Start from the beginning.
+        try self.status[0].startStatus(self);
         try self.performWork();
     }
 
@@ -381,11 +390,15 @@ test "Swap recovery" {
     var bt = try BootTest.init(testing.allocator, BootTest.lpc55s69);
     defer bt.deinit();
 
-    // These are just sizes we will use for testing.
-    const sizes = [2]usize{ 112 * Swap.page_size + 7, 105 * Swap.page_size + Swap.page_size - 1 };
-    // const sizes = [2]usize{ 2 * Swap.page_size + 7, 1 * Swap.page_size + Swap.page_size - 1 };
+    std.testing.log_level = .info;
 
-    var limit: usize = 1000;
+    // These are just sizes we will use for testing.
+    const sizes = if (true)
+        [2]usize{ 112 * Swap.page_size + 7, 105 * Swap.page_size + Swap.page_size - 1 }
+    else
+        [2]usize{ 2 * Swap.page_size + 7, 1 * Swap.page_size + Swap.page_size - 1 };
+
+    var limit: usize = 12;
 
     while (true) : (limit += 1) {
         // Fill in the images.
@@ -411,6 +424,9 @@ test "Swap recovery" {
         // Retry the startup, as if we reached a fresh start.
         bt.sim.counter.reset();
         swap = try Swap.init(&bt.sim, sizes, 1);
+
+        // Run a new startup.  This should always run to completion.
+        try swap.startup();
 
         // Check that the swap completed.
         try bt.sim.verifyImages(sizes);
