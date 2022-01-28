@@ -2,7 +2,7 @@
 //
 // Find hash collisions.
 //
-// Becuase we are using a fairly small hash, collisions are possible,
+// Because we are using a fairly small hash, collisions are possible,
 // although somewhat rare.  In order to test that we handle the
 // collisions correctly, we need to search for data that does indeed
 // collide.
