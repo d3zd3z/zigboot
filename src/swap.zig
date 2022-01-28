@@ -76,6 +76,7 @@ pub const Swap = struct {
     /// Starting process.  This attempts to determine what needs to be
     /// done based on the status pages.
     pub fn startup(self: *Self) !void {
+        std.log.info("--- Running startup", .{});
         const st0 = try self.status[0].scan();
         const st1 = try self.status[1].scan();
 
@@ -120,6 +121,10 @@ pub const Swap = struct {
         while (pos < self.sizes[slot]) : (pos += page_size) {
             const count = std.math.min(self.sizes[slot] - pos, page_size);
             try self.hashPage(self.hashes[slot][page][0..], slot, pos, count);
+            std.log.info("Hashed: slot {}, page {}, {s} ({} bytes)", .{
+                slot,                                                   page,
+                std.fmt.fmtSliceHexLower(self.hashes[slot][page][0..]), count,
+            });
 
             page += 1;
         }
@@ -384,6 +389,31 @@ const Work = struct {
     hash: Swap.Hash,
 };
 
+/// Wrap work with a nicer formatter.
+fn fmtWork(w: *const Work) std.fmt.Formatter(formatWork) {
+    return .{ .data = w };
+}
+
+fn formatWork(
+    data: *const Work,
+    comptime fmt: []const u8,
+    options: std.fmt.FormatOptions,
+    writer: anytype,
+) !void {
+    _ = data;
+    _ = fmt;
+    _ = options;
+    _ = writer;
+    try std.fmt.format(writer, "Work{{src:{:>3}/{:>3}, dest:{:>3}/{:>3}, size:{:>3}, hash:{}}}", .{
+        data.src_slot,
+        data.src_page,
+        data.dest_slot,
+        data.dest_page,
+        data.size,
+        std.fmt.fmtSliceHexLower(data.hash[0..]),
+    });
+}
+
 test "Swap recovery" {
     const testing = std.testing;
     const BootTest = @import("test.zig").BootTest;
@@ -391,6 +421,9 @@ test "Swap recovery" {
     defer bt.deinit();
 
     std.testing.log_level = .info;
+    // Log a messaage to get past the non-ended line from the test
+    // framework.
+    std.log.info("Swap recovery test", .{});
 
     // These are just sizes we will use for testing.
     const sizes = if (true)

@@ -121,6 +121,7 @@ pub const SimFlash = struct {
                 fillBuf(buf_exp[0..count], (1 - id) * max_pages + pos);
 
                 try area.read(pos, buf[0..]);
+                std.log.info("verify: slot {}, page {}", .{ id, pos / page_size });
                 try std.testing.expectEqualSlices(u8, buf_exp[0..], buf[0..]);
 
                 pos += count;
