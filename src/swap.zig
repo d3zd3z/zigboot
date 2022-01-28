@@ -111,7 +111,7 @@ pub const Swap = struct {
         }
 
         // TODO: Start from the beginning.
-        try self.status[0].startStatus(self);
+        // try self.status[0].startStatus(self);
         try self.performWork();
     }
 
@@ -127,6 +127,23 @@ pub const Swap = struct {
             });
 
             page += 1;
+        }
+    }
+
+    // Checking for internal testing.
+    fn checkHash(self: *Self, item: *const Work, buf: []const u8) !void {
+        var dest: [32]u8 = undefined;
+        var hh = Sha256.init(.{});
+        hh.update(self.prefix[0..]);
+        hh.update(buf[0..item.size]);
+        hh.final(dest[0..]);
+        if (std.testing.expectEqualSlices(u8, &item.hash, dest[0..hash_bytes])) |_| {} else |err| {
+            std.log.warn("Hash mismatch, expect: {s}, got: {s} ({} bytes)", .{
+                std.fmt.fmtSliceHexLower(item.hash[0..]),
+                std.fmt.fmtSliceHexLower(dest[0..hash_bytes]),
+                item.size,
+            });
+            return err;
         }
     }
 
@@ -155,11 +172,11 @@ pub const Swap = struct {
         const bound = self.calcBound(0);
 
         // Pos is the destination of each page.
-        var pos: usize = bound.last;
+        var pos: usize = bound.count;
         while (pos > 0) : (pos -= 1) {
-            const size = bound.getSize(pos);
+            const size = bound.getSize(pos - 1);
 
-            if (pos < bound.last and try self.validateSame(.{ 0, 0 }, .{ pos - 1, pos }, size))
+            if (pos < bound.count and try self.validateSame(.{ 0, 0 }, .{ pos - 1, pos }, size))
                 continue;
 
             try self.work[0].append(.{
@@ -170,6 +187,7 @@ pub const Swap = struct {
                 .dest_page = pos,
                 .hash = self.hashes[0][pos - 1],
             });
+            // self.hashes[0][pos] = self.hashes[0][pos - 1];
         }
     }
 
@@ -193,51 +211,59 @@ pub const Swap = struct {
         // At a given pos, we move slot1,pos to slot0,pos, and
         // slot0,pos+1 to slot1.pos.
         var pos: usize = 0;
-        while (pos < bound0.last or pos < bound1.last) : (pos += 1) {
+        while (pos < bound0.count or pos < bound1.count) : (pos += 1) {
             // Move slot 1 to 0.
-            if (pos < bound1.last) {
+            if (pos < bound1.count) {
                 const size = bound1.getSize(pos);
+                std.log.info("1->0 {}, {}", .{ pos, size });
 
-                if (pos < bound0.last and try self.validateSame(.{ 1, 0 }, .{ pos, pos }, size))
+                if (pos < bound0.count and try self.validateSame(.{ 1, 0 }, .{ pos, pos }, size))
                     continue;
                 try self.work[1].append(.{
                     .src_slot = 1,
-                    .dest_slot = 0,
-                    .size = @intCast(u16, size),
                     .src_page = pos,
+                    .dest_slot = 0,
                     .dest_page = pos,
+                    .size = @intCast(u16, size),
                     .hash = self.hashes[1][pos],
                 });
+                // self.hashes[0][pos] = self.hashes[1][pos];
             }
 
             // Move slot 0 to 1.
-            if (pos < bound0.last) {
+            if (pos < bound0.count) {
                 const size = bound0.getSize(pos);
 
-                if (pos < bound1.last and try self.validateSame(.{ 0, 1 }, .{ pos + 1, pos }, size))
+                if (pos < bound1.count and try self.validateSame(.{ 0, 1 }, .{ pos + 1, pos }, size))
                     continue;
 
                 try self.work[1].append(.{
                     .src_slot = 0,
-                    .dest_slot = 1,
-                    .size = @intCast(u16, size),
                     .src_page = pos + 1,
+                    .dest_slot = 1,
                     .dest_page = pos,
+                    .size = @intCast(u16, size),
                     .hash = self.hashes[0][pos],
                 });
+                // self.hashes[1][pos] = self.hashes[0][pos + 1];
             }
         }
     }
 
     /// Perform the work we've set ourselves to do.
     fn performWork(self: *Self) !void {
-        for (self.work) |work| {
+        std.log.warn("Performing work", .{});
+        for (self.work) |work, i| {
+            std.log.warn("Work, phase: {}", .{i});
             for (work.constSlice()) |*item| {
-                std.log.warn("Work: {}", .{item});
+                std.log.warn("Work: {s}", .{fmtWork(item)});
                 try self.areas[item.dest_slot].erase(item.dest_page << page_shift, page_size);
                 try self.areas[item.src_slot].read(item.src_page << page_shift, self.tmp[0..]);
+                try self.checkHash(item, self.tmp[0..]);
                 try self.areas[item.dest_slot].write(item.dest_page << page_shift, self.tmp[0..]);
             }
+
+            // TODO: Advance state when that makes sense.
         }
     }
 
@@ -333,27 +359,28 @@ pub const Swap = struct {
     }
 
     const Bound = struct {
-        // The last page to be moved in the given region.
-        last: usize,
+        // This is the number of pages in the region to move.
+        count: usize,
         // The number of bytes in the last page.  Will be page_size if
         // this image is a multiple of the page size.
         partial: usize,
 
         fn getSize(self: *const Bound, page: usize) usize {
             var size = page_size;
-            if (page == self.last)
+            if (page == self.count - 1)
                 size = self.partial;
+            std.log.info("getSize: bound:{}, page:{} -> {}", .{ self, page, size });
             return size;
         }
     };
     fn calcBound(self: *const Self, slot: usize) Bound {
-        const last = (self.sizes[slot] + (page_size - 1)) >> page_shift;
+        const count = (self.sizes[slot] + (page_size - 1)) >> page_shift;
         var partial = self.sizes[slot] & (page_size - 1);
         if (partial == 0)
             partial = page_size;
-        // std.log.warn("Bound: size: {}, last: {}, partial: {}", .{ self.sizes[slot], last, partial });
+        std.log.warn("Bound: size: {}, count: {}, partial: {}", .{ self.sizes[slot], count, partial });
         return Bound{
-            .last = last,
+            .count = count,
             .partial = partial,
         };
     }
@@ -426,12 +453,14 @@ test "Swap recovery" {
     std.log.info("Swap recovery test", .{});
 
     // These are just sizes we will use for testing.
-    const sizes = if (true)
+    const sizes = if (false)
         [2]usize{ 112 * Swap.page_size + 7, 105 * Swap.page_size + Swap.page_size - 1 }
     else
         [2]usize{ 2 * Swap.page_size + 7, 1 * Swap.page_size + Swap.page_size - 1 };
 
-    var limit: usize = 12;
+    // Zero doesn't work, as it will fail when we try to set the
+    // limit.
+    var limit: usize = 1;
 
     while (true) : (limit += 1) {
         // Fill in the images.
