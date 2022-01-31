@@ -441,62 +441,76 @@ fn formatWork(
     });
 }
 
-test "Swap recovery" {
+const RecoveryTest = struct {
+    const Self = @This();
     const testing = std.testing;
     const BootTest = @import("test.zig").BootTest;
-    var bt = try BootTest.init(testing.allocator, BootTest.lpc55s69);
-    defer bt.deinit();
-
-    std.testing.log_level = .info;
-    // Log a messaage to get past the non-ended line from the test
-    // framework.
-    std.log.info("Swap recovery test", .{});
 
     // These are just sizes we will use for testing.
-    const sizes = if (false)
+    const testSizes = if (false)
         [2]usize{ 112 * Swap.page_size + 7, 105 * Swap.page_size + Swap.page_size - 1 }
     else
         [2]usize{ 2 * Swap.page_size + 7, 1 * Swap.page_size + Swap.page_size - 1 };
 
-    // Zero doesn't work, as it will fail when we try to set the
-    // limit.
-    var limit: usize = 1;
+    bt: BootTest,
 
-    while (true) : (limit += 1) {
-        // Fill in the images.
-        try bt.sim.installImages(sizes);
+    fn init() !RecoveryTest {
+        var bt = try BootTest.init(testing.allocator, BootTest.lpc55s69);
+        errdefer bt.deinit();
 
-        var swap = try Swap.init(&bt.sim, sizes, 1);
-
-        // Writing the magic to slot 1 initiates an upgrade.
-        try swap.status[1].writeMagic();
-
-        // Set our limit, stopping after that many flash steps.
-        bt.sim.counter.reset();
-        try bt.sim.counter.setLimit(limit);
-
-        // TODO: Handle hash collision, restarting as appropriate.
-        if (swap.startup()) |_| {
-            break;
-        } else |err| {
-            if (err != error.Expired)
-                return err;
-        }
-
-        // Retry the startup, as if we reached a fresh start.
-        bt.sim.counter.reset();
-        swap = try Swap.init(&bt.sim, sizes, 1);
-
-        // Run a new startup.  This should always run to completion.
-        try swap.startup();
-
-        // Check that the swap completed.
-        try bt.sim.verifyImages(sizes);
-
-        try swap.startup();
+        return Self{
+            .bt = bt,
+        };
     }
 
+    fn deinit(self: *Self) void {
+        self.bt.deinit();
+    }
+
+    fn single(self: *Self, limit: usize, sizes: [2]usize) !void {
+        var lim: usize = limit;
+        while (true) : (lim += 1) {
+            try self.bt.sim.installImages(sizes);
+
+            var swap = try Swap.init(&self.bt.sim, sizes, 1);
+
+            // Writing the magic to slot 1 initiates an upgrade.
+            try swap.status[1].writeMagic();
+
+            // Set our limit, stopping after that many flash steps.
+            self.bt.sim.counter.reset();
+            try self.bt.sim.counter.setLimit(limit);
+
+            // TODO: Handle hash collision, restarting as appropriate.
+            if (swap.startup()) |_| {
+                break;
+            } else |err| {
+                if (err != error.Expired)
+                    return err;
+            }
+
+            // Retry the startup, as if we reached a fresh start.
+            self.bt.sim.counter.reset();
+            swap = try Swap.init(&self.bt.sim, sizes, 1);
+
+            // Run a new startup.  This should always run to completion.
+            try swap.startup();
+
+            // Check that the swap completed.
+            try self.bt.sim.verifyImages(sizes);
+
+            try swap.startup();
+        }
+    }
+};
+
+test "Swap recovery" {
+    std.testing.log_level = .info;
+    var tt = try RecoveryTest.init();
+    defer tt.deinit();
+    try tt.single(10, RecoveryTest.testSizes);
+
     // Write out the swap status.
-    try (try bt.sim.open(0)).save("swap-0.bin");
-    try (try bt.sim.open(1)).save("swap-1.bin");
+    try (try tt.bt.sim.open(0)).save("swap-0.bin");
+    try (try tt.bt.sim.open(1)).save("swap-1.bin");
 }
