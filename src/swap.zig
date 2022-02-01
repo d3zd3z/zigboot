@@ -508,7 +508,7 @@ test "Swap recovery" {
     std.testing.log_level = .info;
     var tt = try RecoveryTest.init();
     defer tt.deinit();
-    try tt.single(10, RecoveryTest.testSizes);
+    try tt.single(1, RecoveryTest.testSizes);
 
     // Write out the swap status.
     try (try tt.bt.sim.open(0)).save("swap-0.bin");

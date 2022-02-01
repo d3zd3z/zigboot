@@ -92,7 +92,7 @@ pub const SimFlash = struct {
 
                 // Generate some random data.
                 std.mem.set(u8, buf[0..], 0xFF);
-                fillBuf(buf[0..count], id * max_pages + pos);
+                fillBuf(buf[0..count], id * max_pages + pos, id, pos / page_size);
 
                 // std.log.warn("Write slot {}, page {} (size {})", .{ id, pos / page_size, size });
                 try area.erase(pos, page_size);
@@ -118,7 +118,7 @@ pub const SimFlash = struct {
                     count = page_size;
 
                 std.mem.set(u8, buf_exp[0..], 0xFF);
-                fillBuf(buf_exp[0..count], (1 - id) * max_pages + pos);
+                fillBuf(buf_exp[0..count], (1 - id) * max_pages + pos, id, pos / page_size);
 
                 try area.read(pos, buf[0..]);
                 std.log.info("verify: slot {}, page {}", .{ id, pos / page_size });
@@ -392,14 +392,14 @@ test "Flash operations" {
     while (page < page_count) : (page += 1) {
         const offset = page * page_size;
         try area.erase(offset, page_size);
-        fillBuf(buf, page);
+        fillBuf(buf, page, 0, page);
         try area.write(offset, buf);
     }
 
     // Make sure it can all read back.
     page = 0;
     while (page < page_count) : (page += 1) {
-        fillBuf(buf, page);
+        fillBuf(buf, page, 0, page);
         std.mem.set(u8, buf2, 0xAA);
         try area.read(page * page_size, buf2);
         try testing.expectEqualSlices(u8, buf, buf2);
@@ -407,7 +407,22 @@ test "Flash operations" {
 }
 
 // Fill a buffer with random bytes, using the given seed.
-fn fillBuf(buf: []u8, seed: u64) void {
+// Conditionall, the random can be reserved for just a small part, and
+// the entire buffer can be made readable text.
+fn fillBuf(buf: []u8, seed: u64, slot: usize, page: usize) void {
     var rng = std.rand.DefaultPrng.init(seed);
-    rng.fill(buf);
+    if (false) {
+        _ = slot;
+        _ = page;
+        rng.fill(buf);
+    } else {
+        var rawseed: [4]u8 = undefined;
+        rng.fill(&rawseed);
+        mem.set(u8, buf, ' ');
+        _ = std.fmt.bufPrint(buf, "{s} Debug page -----\nSlot: {}\nPage: {}\n", .{
+            std.fmt.fmtSliceHexLower(&rawseed),
+            slot,
+            page,
+        }) catch {};
+    }
 }

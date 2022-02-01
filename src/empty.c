@@ -8,8 +8,40 @@
 #include <drivers/timer/system_timer.h>
 #include <string.h>
 
+#define LOG_LEVEL LOG_LEVEL_INF
+#include <logging/log.h>
+#include <logging/log_ctrl.h>
+LOG_MODULE_REGISTER(zigboot);
+
 uint64_t uptime_ticks(void) {
 	return k_uptime_get();
+}
+
+void zig_log_message(int level, const char *msg)
+{
+	switch (level) {
+	case 0:
+		LOG_ERR("%s", msg);
+		break;
+	case 1:
+		LOG_WRN("%s", msg);
+		break;
+	case 2:
+		LOG_INF("%s", msg);
+		break;
+	default:
+		LOG_DBG("%s", msg);
+	}
+
+	// TODO: Perhaps have another thread do this?
+	while (log_process(false)) {
+	}
+}
+
+void extra(void)
+{
+	log_init();
+	LOG_ERR("Initializatin of logging");
 }
 
 /*

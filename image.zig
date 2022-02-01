@@ -148,8 +148,123 @@ pub fn hash_image(fa: *const FlashArea, header: *const ImageHeader, hash: *[32]u
     zephyr.print("\n", .{});
 }
 
-// A small hashing benchmarking.  Hashes a single page 'n' times.
+// Hashing benchmark, with SHA256.
 pub fn hash_bench(fa: *const FlashArea, count: usize) !void {
+    try hash_core(struct {
+        const Self = @This();
+        pub const size = 32;
+        state: Sha256,
+        pub fn init() Self {
+            return .{
+                .state = Sha256.init(.{}),
+            };
+        }
+        pub fn update(self: *Self, buf: []const u8) void {
+            self.state.update(buf);
+        }
+        pub fn final(self: *Self, out: *[size]u8) void {
+            self.state.final(out);
+        }
+    }, fa, count);
+}
+
+pub fn null_bench(fa: *const FlashArea, count: usize) !void {
+    try hash_core(struct {
+        const Self = @This();
+        pub const size = 4;
+        state: u32,
+        pub fn init() Self {
+            return .{ .state = 42 };
+        }
+        pub fn update(self: *Self, buf: []const u8) void {
+            _ = self;
+            _ = buf;
+        }
+        pub fn final(self: *Self, out: *[size]u8) void {
+            _ = self;
+            std.mem.copy(u8, out, std.mem.asBytes(&self.state));
+        }
+    }, fa, count);
+}
+
+pub fn murmur_bench(fa: *const FlashArea, count: usize) !void {
+    try hash_core(struct {
+        const Self = @This();
+        pub const size = 4;
+        state: ?u32,
+        pub fn init() Self {
+            return .{ .state = null };
+        }
+        pub fn update(self: *Self, buf: []const u8) void {
+            if (self.state) |state| {
+                // This really isn't right, since it can't be chained
+                // like this.
+                self.state = std.hash.Murmur2_32.hashWithSeed(buf, state);
+            } else {
+                self.state = std.hash.Murmur2_32.hash(buf);
+            }
+        }
+        pub fn final(self: *Self, out: *[size]u8) void {
+            if (self.state) |state| {
+                _ = out;
+                _ = state;
+                std.mem.copy(u8, out, std.mem.asBytes(&state));
+            } else {
+                unreachable;
+            }
+        }
+    }, fa, count);
+}
+
+pub fn sip_bench(fa: *const FlashArea, count: usize) !void {
+    const Sip = std.crypto.hash.sip.SipHash64(2, 4);
+
+    try hash_core(struct {
+        const Self = @This();
+        pub const size = Sip.mac_length;
+        state: Sip,
+        pub fn init() Self {
+            var key: [Sip.key_length]u8 = undefined;
+            std.mem.set(u8, &key, 0);
+            key[0] = 1;
+            return .{ .state = Sip.init(&key) };
+        }
+        pub fn update(self: *Self, buf: []const u8) void {
+            self.state.update(buf);
+        }
+        pub fn final(self: *Self, out: *[size]u8) void {
+            self.state.final(out);
+        }
+    }, fa, count);
+}
+
+fn hash_core(Core: anytype, fa: *const FlashArea, count: usize) !void {
+    const BUFSIZE = 128;
+    const PAGESIZE = 512;
+    var buf: [BUFSIZE]u8 = undefined;
+    var hash: [Core.size]u8 = undefined;
+
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        var h = Core.init();
+        var pos: u32 = 0;
+        while (pos < PAGESIZE) {
+            var todo = PAGESIZE - pos;
+            if (todo > BUFSIZE)
+                todo = BUFSIZE;
+            _ = fa;
+            // try fa.read(0 + pos, buf[0..todo]);
+            h.update(buf[0..todo]);
+            pos += todo;
+        }
+        h.final(&hash);
+
+        std.mem.doNotOptimizeAway(&hash[0]);
+    }
+}
+
+// A small hashing benchmarking.  Hashes a single page 'n' times.
+fn hash_bench2(fa: *const FlashArea, count: usize) !void {
     const BUFSIZE = 128;
     const PAGESIZE = 512;
     var buf: [BUFSIZE]u8 = undefined;

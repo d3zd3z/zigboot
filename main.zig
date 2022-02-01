@@ -20,9 +20,13 @@ const FlashArea = sys.flash.FlashArea;
 pub const log_level: std.log.Level = .info;
 pub const log = zephyr.log;
 
+extern fn extra() void;
+
 export fn main() void {
+    extra();
     std.log.info("Starting zigboot", .{});
-    flashTest() catch |err| {
+    const result = if (false) flashTest() else core();
+    result catch |err| {
         std.log.err("Fatal: {}", .{err});
     };
 }
@@ -41,9 +45,30 @@ fn core() !void {
     try image.dump_layout();
 
     {
-        std.log.info("Hash benchmark", .{});
+        std.log.info("SHA256 Hash benchmark", .{});
         const timer = Timer.start();
         try image.hash_bench(img.fa, 1000);
+        timer.stamp("Hash time");
+    }
+
+    {
+        std.log.info("Null Hash benchmark", .{});
+        const timer = Timer.start();
+        try image.null_bench(img.fa, 100000);
+        timer.stamp("Hash time");
+    }
+
+    {
+        std.log.info("Murmur2 Hash benchmark", .{});
+        const timer = Timer.start();
+        try image.murmur_bench(img.fa, 100000);
+        timer.stamp("Hash time");
+    }
+
+    {
+        std.log.info("SipHash64(2,4) Hash benchmark", .{});
+        const timer = Timer.start();
+        try image.murmur_bench(img.fa, 100000);
         timer.stamp("Hash time");
     }
 
