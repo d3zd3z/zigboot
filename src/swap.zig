@@ -13,24 +13,24 @@ const prefix_length = 4;
 // We can use a Sha hasher by appending the prefix to the init.
 // For Siphash, the prefix will be used as the prefix of the data.
 const Sha256Hasher = struct {
-    const T = std.crypto.hash.sha2.Sha256;
-    const digest_length = T.digest_length;
-    fn init(prefix: *const [prefix_length]u8) T {
+    pub const T = std.crypto.hash.sha2.Sha256;
+    pub const digest_length = T.digest_length;
+    pub fn init(prefix: *const [prefix_length]u8) T {
         var hh = T.init(.{});
         hh.update(prefix);
         return hh;
     }
 };
 const SipHasher = struct {
-    const T = std.crypto.auth.siphash.SipHash64(2, 4);
-    const digest_length = T.mac_length;
-    fn init(prefix: *const [prefix_length]u8) T {
+    pub const T = std.crypto.auth.siphash.SipHash64(2, 4);
+    pub const digest_length = T.mac_length;
+    pub fn init(prefix: *const [prefix_length]u8) T {
         var buf: [T.key_length]u8 = @splat(T.key_length, @as(u8, 0));
         mem.copy(u8, buf[0..prefix_length], prefix);
         return T.init(&buf);
     }
 };
-const Hasher = if (false) Sha256Hasher else SipHasher;
+pub const Hasher = if (false) Sha256Hasher else SipHasher;
 
 const config = @import("config.zig");
 const sys = @import("sys.zig");
@@ -544,7 +544,7 @@ test "Swap recovery" {
     std.testing.log_level = .info;
     var tt = try RecoveryTest.init();
     defer tt.deinit();
-    try tt.single(1, RecoveryTest.testSizes);
+    try tt.single(3, RecoveryTest.testSizes);
 
     // Write out the swap status.
     try (try tt.bt.sim.open(0)).save("swap-0.bin");
