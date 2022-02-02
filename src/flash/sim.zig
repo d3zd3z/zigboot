@@ -5,6 +5,8 @@ const std = @import("std");
 const mem = std.mem;
 const testing = std.testing;
 
+const pdump = @import("../pdump.zig").pdump;
+
 // TODO: These shouldn't be hard coded.
 pub const page_size = 512;
 pub const max_pages = 1024;
@@ -94,7 +96,8 @@ pub const SimFlash = struct {
                 std.mem.set(u8, buf[0..], 0xFF);
                 fillBuf(buf[0..count], id * max_pages + pos, id, pos / page_size);
 
-                // std.log.warn("Write slot {}, page {} (size {})", .{ id, pos / page_size, size });
+                // std.log.warn("Write slot {}, page {} (size {})", .{ id, pos / page_size, count });
+                // try pdump(buf[0..count]);
                 try area.erase(pos, page_size);
                 try area.write(pos, buf[0..]);
 
