@@ -5,20 +5,28 @@
 const std = @import("std");
 const mem = std.mem;
 
+// Bytes of changeable prefix.  This doesn't need to be large, as we
+// aren't really using it as a key (it will almost always just be
+// '1').
+const prefix_length = 4;
+
 // We can use a Sha hasher by appending the prefix to the init.
 // For Siphash, the prefix will be used as the prefix of the data.
 const Sha256Hasher = struct {
     const T = std.crypto.hash.sha2.Sha256;
     const digest_length = T.digest_length;
-    fn init() T {
-        return T.init(.{});
+    fn init(prefix: *const [prefix_length]u8) T {
+        var hh = T.init(.{});
+        hh.update(prefix);
+        return hh;
     }
 };
 const SipHasher = struct {
     const T = std.crypto.auth.siphash.SipHash64(2, 4);
     const digest_length = T.mac_length;
-    fn init() T {
+    fn init(prefix: *const [prefix_length]u8) T {
         var buf: [T.key_length]u8 = @splat(T.key_length, @as(u8, 0));
+        mem.copy(u8, buf[0..prefix_length], prefix);
         return T.init(&buf);
     }
 };
@@ -151,8 +159,7 @@ pub const Swap = struct {
     // Checking for internal testing.
     fn checkHash(self: *Self, item: *const Work, buf: []const u8) !void {
         var dest: [Hasher.digest_length]u8 = undefined;
-        var hh = Hasher.init();
-        hh.update(self.prefix[0..]);
+        var hh = Hasher.init(&self.prefix);
         hh.update(buf[0..item.size]);
         hh.final(dest[0..]);
         if (std.testing.expectEqualSlices(u8, &item.hash, dest[0..hash_bytes])) |_| {} else |err| {
@@ -166,8 +173,7 @@ pub const Swap = struct {
     }
 
     fn hashPage(self: *Self, dest: []u8, slot: usize, offset: usize, count: usize) !void {
-        var hh = Hasher.init();
-        hh.update(self.prefix[0..]);
+        var hh = Hasher.init(&self.prefix);
         try self.areas[slot].read(offset, self.tmp[0..count]);
         hh.update(self.tmp[0..count]);
         var hash: [Hasher.digest_length]u8 = undefined;
@@ -175,8 +181,11 @@ pub const Swap = struct {
         mem.copy(u8, dest[0..], hash[0..hash_bytes]);
     }
 
+    // This is used by the status code to verify its contents.  We
+    // just use an empty prefix.
     pub fn calcHash(data: []const u8) [hash_bytes]u8 {
-        var hh = Hasher.init();
+        const prefix: [prefix_length]u8 = @splat(prefix_length, @as(u8, 0));
+        var hh = Hasher.init(&prefix);
         hh.update(data);
         var hash: [Hasher.digest_length]u8 = undefined;
         hh.final(hash[0..]);
@@ -337,8 +346,7 @@ pub const Swap = struct {
             var pos: usize = 0;
             var page: usize = 0;
             while (pos < self.sizes[slot]) : (pos += page_size) {
-                var hh = Hasher.init();
-                hh.update(self.prefix[0..]);
+                var hh = Hasher.init(&self.prefix);
                 const num: usize = slot * max_pages * page_size + pos;
                 hh.update(std.mem.asBytes(&num));
                 var hash: [Hasher.digest_length]u8 = undefined;
@@ -362,8 +370,7 @@ pub const Swap = struct {
             var pos: usize = 0;
             var page: usize = 0;
             while (pos < self.sizes[slot]) : (pos += page_size) {
-                var hh = Hasher.init();
-                hh.update(self.prefix[0..]);
+                var hh = Hasher.init(&self.prefix);
                 const num: usize = slot * max_pages * page_size + pos;
                 hh.update(std.mem.asBytes(&num));
                 var hash: [Hasher.digest_length]u8 = undefined;
