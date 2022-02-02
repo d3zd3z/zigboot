@@ -500,24 +500,34 @@ const RecoveryTest = struct {
             try self.bt.sim.counter.setLimit(limit);
 
             // TODO: Handle hash collision, restarting as appropriate.
+            var interrupted = false;
             if (swap.startup()) |_| {
-                break;
+                std.log.info("Counter reset after {} steps", .{self.bt.sim.counter.current});
             } else |err| {
                 if (err != error.Expired)
                     return err;
+                interrupted = true;
             }
 
-            // Retry the startup, as if we reached a fresh start.
-            self.bt.sim.counter.reset();
-            swap = try Swap.init(&self.bt.sim, sizes, 1);
+            if (interrupted) {
+                // Retry the startup, as if we reached a fresh start.
+                self.bt.sim.counter.reset();
+                swap = try Swap.init(&self.bt.sim, sizes, 1);
 
-            // Run a new startup.  This should always run to completion.
-            try swap.startup();
+                // Run a new startup.  This should always run to completion.
+                try swap.startup();
+            }
 
             // Check that the swap completed.
+            std.log.info("Verifying flash", .{});
             try self.bt.sim.verifyImages(sizes);
 
-            try swap.startup();
+            if (!interrupted)
+                break;
+
+            // Until we're ready for a full test, just do a single
+            // run.
+            break;
         }
     }
 };
