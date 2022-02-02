@@ -111,8 +111,11 @@ pub const SimFlash = struct {
         var buf: [page_size]u8 = undefined;
         var buf_exp: [page_size]u8 = undefined;
 
+        // Verify that the swap happened.
         for (sizes) |size, id| {
-            var area = try self.open(@intCast(u8, id));
+            // Reads come from "other", but expected data as if from
+            // the current one.
+            var area = try self.open(@intCast(u8, 1 - id));
 
             var pos: usize = 0;
             while (pos < size) {
@@ -121,11 +124,21 @@ pub const SimFlash = struct {
                     count = page_size;
 
                 std.mem.set(u8, buf_exp[0..], 0xFF);
-                fillBuf(buf_exp[0..count], (1 - id) * max_pages + pos, id, pos / page_size);
+                fillBuf(buf_exp[0..count], id * max_pages + pos, id, pos / page_size);
 
                 try area.read(pos, buf[0..]);
-                std.log.info("verify: slot {}, page {}", .{ id, pos / page_size });
-                try std.testing.expectEqualSlices(u8, buf_exp[0..], buf[0..]);
+
+                const exp = buf_exp[0..count];
+                const got = buf[0..count];
+                // Print the "other" slot we are verifying.
+                std.log.info("verify: slot {}, page {} ({} bytes)", .{ 1 - id, pos / page_size, count });
+                if (!mem.eql(u8, exp, got)) {
+                    std.log.info("Expecting:", .{});
+                    try pdump(exp);
+                    std.log.info("Got:", .{});
+                    try pdump(got);
+                }
+                try std.testing.expectEqualSlices(u8, exp, got);
 
                 pos += count;
             }
