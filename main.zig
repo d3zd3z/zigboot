@@ -132,6 +132,6 @@ const Timer = struct {
 
     fn stamp(self: *const Self, message: []const u8) void {
         const now = zephyr.uptime();
-        zephyr.println("{s}: {}ms", .{ message, now - self.start });
+        std.log.info("{s}: {}ms", .{ message, now - self.start });
     }
 };
