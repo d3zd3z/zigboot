@@ -114,6 +114,7 @@ pub const Swap = struct {
 
             // Write this status out, which should move us on to the
             // first phase.
+            std.log.info("Writing initial status", .{});
             try self.status[0].startStatus(self);
         } else if (st1 == .Request and (st0 == .Slide or st0 == .Swap)) {
             // The swap operation was interrupted, load the status so
