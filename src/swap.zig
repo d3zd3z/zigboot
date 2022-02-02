@@ -4,7 +4,25 @@
 
 const std = @import("std");
 const mem = std.mem;
-const Sha256 = std.crypto.hash.sha2.Sha256;
+
+// We can use a Sha hasher by appending the prefix to the init.
+// For Siphash, the prefix will be used as the prefix of the data.
+const Sha256Hasher = struct {
+    const T = std.crypto.hash.sha2.Sha256;
+    const digest_length = T.digest_length;
+    fn init() T {
+        return T.init(.{});
+    }
+};
+const SipHasher = struct {
+    const T = std.crypto.auth.siphash.SipHash64(2, 4);
+    const digest_length = T.mac_length;
+    fn init() T {
+        var buf: [T.key_length]u8 = @splat(T.key_length, @as(u8, 0));
+        return T.init(&buf);
+    }
+};
+const Hasher = if (false) Sha256Hasher else SipHasher;
 
 const config = @import("config.zig");
 const sys = @import("sys.zig");
@@ -132,8 +150,8 @@ pub const Swap = struct {
 
     // Checking for internal testing.
     fn checkHash(self: *Self, item: *const Work, buf: []const u8) !void {
-        var dest: [32]u8 = undefined;
-        var hh = Sha256.init(.{});
+        var dest: [Hasher.digest_length]u8 = undefined;
+        var hh = Hasher.init();
         hh.update(self.prefix[0..]);
         hh.update(buf[0..item.size]);
         hh.final(dest[0..]);
@@ -148,19 +166,19 @@ pub const Swap = struct {
     }
 
     fn hashPage(self: *Self, dest: []u8, slot: usize, offset: usize, count: usize) !void {
-        var hh = Sha256.init(.{});
+        var hh = Hasher.init();
         hh.update(self.prefix[0..]);
         try self.areas[slot].read(offset, self.tmp[0..count]);
         hh.update(self.tmp[0..count]);
-        var hash: [32]u8 = undefined; // TODO: magic number
+        var hash: [Hasher.digest_length]u8 = undefined;
         hh.final(hash[0..]);
         mem.copy(u8, dest[0..], hash[0..hash_bytes]);
     }
 
     pub fn calcHash(data: []const u8) [hash_bytes]u8 {
-        var hh = Sha256.init(.{});
+        var hh = Hasher.init();
         hh.update(data);
-        var hash: [32]u8 = undefined;
+        var hash: [Hasher.digest_length]u8 = undefined;
         hh.final(hash[0..]);
         var result: [hash_bytes]u8 = undefined;
         mem.copy(u8, result[0..], hash[0..4]);
@@ -319,11 +337,11 @@ pub const Swap = struct {
             var pos: usize = 0;
             var page: usize = 0;
             while (pos < self.sizes[slot]) : (pos += page_size) {
-                var hh = Sha256.init(.{});
+                var hh = Hasher.init();
                 hh.update(self.prefix[0..]);
                 const num: usize = slot * max_pages * page_size + pos;
                 hh.update(std.mem.asBytes(&num));
-                var hash: [32]u8 = undefined; // TODO: magic number
+                var hash: [Hasher.digest_length]u8 = undefined;
                 hh.final(hash[0..]);
                 std.mem.copy(u8, self.hashes[slot][page][0..], hash[0..hash_bytes]);
                 // std.log.warn("hash: {} 0x{any}", .{ page, self.hashes[slot][page] });
@@ -344,11 +362,11 @@ pub const Swap = struct {
             var pos: usize = 0;
             var page: usize = 0;
             while (pos < self.sizes[slot]) : (pos += page_size) {
-                var hh = Sha256.init(.{});
+                var hh = Hasher.init();
                 hh.update(self.prefix[0..]);
                 const num: usize = slot * max_pages * page_size + pos;
                 hh.update(std.mem.asBytes(&num));
-                var hash: [32]u8 = undefined;
+                var hash: [Hasher.digest_length]u8 = undefined;
                 hh.final(hash[0..]);
                 // std.log.warn("Checking: {} in slot {}", .{ page, slot });
                 try std.testing.expectEqualSlices(u8, hash[0..hash_bytes], self.hashes[slot][page][0..]);
