@@ -102,7 +102,7 @@ pub const Swap = struct {
     /// Starting process.  This attempts to determine what needs to be
     /// done based on the status pages.
     pub fn startup(self: *Self) !void {
-        std.log.info("--- Running startup", .{});
+        // std.log.info("--- Running startup", .{});
         const st0 = try self.status[0].scan();
         const st1 = try self.status[1].scan();
 
@@ -115,7 +115,7 @@ pub const Swap = struct {
 
             // Write this status out, which should move us on to the
             // first phase.
-            std.log.info("Writing initial status", .{});
+            // std.log.info("Writing initial status", .{});
             try self.status[0].startStatus(self);
             initial = true;
         } else if (st1 == .Request and (st0 == .Slide or st0 == .Swap)) {
@@ -223,10 +223,10 @@ pub const Swap = struct {
         while (pos < self.sizes[slot]) : (pos += page_size) {
             const count = std.math.min(self.sizes[slot] - pos, page_size);
             try self.hashPage(self.hashes[slot][page][0..], slot, pos, count);
-            std.log.info("Hashed: slot {}, page {}, {s} ({} bytes)", .{
-                slot,                                                   page,
-                std.fmt.fmtSliceHexLower(self.hashes[slot][page][0..]), count,
-            });
+            // std.log.info("Hashed: slot {}, page {}, {s} ({} bytes)", .{
+            //     slot,                                                   page,
+            //     std.fmt.fmtSliceHexLower(self.hashes[slot][page][0..]), count,
+            // });
 
             page += 1;
         }
@@ -318,7 +318,7 @@ pub const Swap = struct {
             // Move slot 1 to 0.
             if (pos < bound1.count) {
                 const size = bound1.getSize(pos);
-                std.log.info("1->0 {}, {}", .{ pos, size });
+                // std.log.info("1->0 {}, {}", .{ pos, size });
 
                 if (pos < bound0.count and try self.validateSame(.{ 1, 0 }, .{ pos, pos }, size, initial))
                     continue;
@@ -481,7 +481,7 @@ pub const Swap = struct {
             var size = page_size;
             if (page == self.count - 1)
                 size = self.partial;
-            std.log.info("getSize: bound:{}, page:{} -> {}", .{ self, page, size });
+            // std.log.info("getSize: bound:{}, page:{} -> {}", .{ self, page, size });
             return size;
         }
     };
@@ -490,7 +490,7 @@ pub const Swap = struct {
         var partial = self.sizes[slot] & (page_size - 1);
         if (partial == 0)
             partial = page_size;
-        std.log.warn("Bound: size: {}, count: {}, partial: {}", .{ self.sizes[slot], count, partial });
+        // std.log.warn("Bound: size: {}, count: {}, partial: {}", .{ self.sizes[slot], count, partial });
         return Bound{
             .count = count,
             .partial = partial,
@@ -618,7 +618,7 @@ const RecoveryTest = struct {
             }
 
             // Check that the swap completed.
-            std.log.info("Verifying flash", .{});
+            // std.log.info("Verifying flash", .{});
             try self.bt.sim.verifyImages(sizes);
 
             if (!interrupted)

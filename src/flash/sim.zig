@@ -131,7 +131,7 @@ pub const SimFlash = struct {
                 const exp = buf_exp[0..count];
                 const got = buf[0..count];
                 // Print the "other" slot we are verifying.
-                std.log.info("verify: slot {}, page {} ({} bytes)", .{ 1 - id, pos / page_size, count });
+                // std.log.info("verify: slot {}, page {} ({} bytes)", .{ 1 - id, pos / page_size, count });
                 if (!mem.eql(u8, exp, got)) {
                     std.log.info("Expecting:", .{});
                     try pdump(exp);
