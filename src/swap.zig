@@ -106,6 +106,7 @@ pub const Swap = struct {
         const st0 = try self.status[0].scan();
         const st1 = try self.status[1].scan();
 
+        var initial = false;
         if (st0 == .Unknown and st1 == .Request) {
             // Initial request for work.  Compute hashes over all of
             // the data.
@@ -116,6 +117,7 @@ pub const Swap = struct {
             // first phase.
             std.log.info("Writing initial status", .{});
             try self.status[0].startStatus(self);
+            initial = true;
         } else if (st1 == .Request and (st0 == .Slide or st0 == .Swap)) {
             // The swap operation was interrupted, load the status so
             // that we can then try to recover where we left off.
@@ -125,21 +127,94 @@ pub const Swap = struct {
             return error.StateError;
         }
 
-        std.log.warn("Recover at state: {}", .{st0});
+        // std.log.warn("Recover at state: {}", .{st0});
 
         // Build the work data.
-        try self.workSlide0();
-        try self.workSwap();
+        try self.workSlide0(initial);
+        try self.workSwap(initial);
 
         // If we didn't just start from "Request", we need to recover
         // our state.
+        var restart = Recovered{ .work = 0, .step = 0 };
         if (st0 == .Slide or st0 == .Swap) {
-            @panic("TODO");
+            restart = try self.recover(st0);
         }
 
-        // TODO: Start from the beginning.
-        // try self.status[0].startStatus(self);
-        try self.performWork();
+        try self.performWork(restart);
+    }
+
+    const Recovered = struct {
+        work: usize,
+        step: usize,
+    };
+
+    // Perform recovery.  The initial state will tell us what work
+    // phase we are in, and we will consider that work to be partially
+    // completed.  Within that phase, we scan the work list, looking
+    // for the first item that clearly has not been performed
+    // (destination does not match).  Once we've found that, back up
+    // on, if possible, since we don't know if the one we found was
+    // partially done, or just not done at all.
+    fn recover(self: *Self, phase: Status.Phase) !Recovered {
+        const workNo = try phase.whichWork();
+        // std.log.info("Recovering work: {}", .{workNo});
+
+        // Scan through the work list, stopping at the first entry
+        // where the destination doesn't appear to have been written.
+        var i: usize = 0;
+        while (i < self.work[workNo].len) : (i += 1) {
+            const item = &self.work[workNo].buffer[i];
+            const wstate = self.areas[item.dest_slot].getState(item.dest_page << page_shift) catch {
+                break;
+            };
+            if (wstate != .Written) {
+                // If it doesn't look written, assume not, and this is
+                // valid.
+                break;
+            }
+
+            // If it is written, check if it has the correctly written
+            // hash.
+            // std.log.info("Page {} is {}", .{ i, wstate });
+            // std.log.info("  work: {s}", .{fmtWork(item)});
+            var hash: [hash_bytes]u8 = undefined;
+            if (self.hashPage(&hash, item.dest_slot, item.dest_page << page_shift, item.size)) |_| {} else |_| {
+                // Consider read errors as just the data not being
+                // valid.  Whether a given page will read as an error
+                // or not depends on the device.
+                break;
+            }
+            if (!mem.eql(u8, &hash, &item.hash)) {
+                break;
+            }
+        }
+
+        // At this point, unless we are on the first work item, go
+        // backwards one work step, and redo that, if the source is
+        // still present.
+        // std.log.info("Recover at {}", .{i});
+        if (i > 0) {
+            const item = &self.work[workNo].buffer[i - 1];
+            if (self.areas[item.src_slot].getState(item.src_page << page_shift)) |rstate| {
+                if (rstate != .Written) {
+                    // Unreadable, don't back up.
+                } else {
+                    var hash: [hash_bytes]u8 = undefined;
+                    if (self.hashPage(&hash, item.src_slot, item.src_page << page_shift, item.size)) |_| {
+                        // Only stay back on if the hash didn't work
+                        // out.
+                        if (mem.eql(u8, &hash, &item.hash)) {
+                            i -= 1;
+                        }
+                    } else |_| {}
+                }
+            } else |_| {
+                // Unreadable, don't back up.
+            }
+            // std.log.info("  moved to {}", .{i});
+        }
+
+        return Recovered{ .work = workNo, .step = i };
     }
 
     fn oneHash(self: *Self, slot: usize) !void {
@@ -196,7 +271,7 @@ pub const Swap = struct {
     }
 
     // Compute the work for sliding slot 0 down by one.
-    pub fn workSlide0(self: *Self) !void {
+    pub fn workSlide0(self: *Self, initial: bool) !void {
         const bound = self.calcBound(0);
 
         // Pos is the destination of each page.
@@ -204,7 +279,7 @@ pub const Swap = struct {
         while (pos > 0) : (pos -= 1) {
             const size = bound.getSize(pos - 1);
 
-            if (pos < bound.count and try self.validateSame(.{ 0, 0 }, .{ pos - 1, pos }, size))
+            if (pos < bound.count and try self.validateSame(.{ 0, 0 }, .{ pos - 1, pos }, size, initial))
                 continue;
 
             try self.work[0].append(.{
@@ -229,7 +304,7 @@ pub const Swap = struct {
     // we want to move A1 to slot 0, and A0 to slot 1.  This
     // continues, stopping either the left or right movement when we
     // have exceeded the size for that side.
-    fn workSwap(self: *Self) !void {
+    fn workSwap(self: *Self, initial: bool) !void {
         const bound0 = self.calcBound(0);
         const bound1 = self.calcBound(1);
 
@@ -245,7 +320,7 @@ pub const Swap = struct {
                 const size = bound1.getSize(pos);
                 std.log.info("1->0 {}, {}", .{ pos, size });
 
-                if (pos < bound0.count and try self.validateSame(.{ 1, 0 }, .{ pos, pos }, size))
+                if (pos < bound0.count and try self.validateSame(.{ 1, 0 }, .{ pos, pos }, size, initial))
                     continue;
                 try self.work[1].append(.{
                     .src_slot = 1,
@@ -262,7 +337,7 @@ pub const Swap = struct {
             if (pos < bound0.count) {
                 const size = bound0.getSize(pos);
 
-                if (pos < bound1.count and try self.validateSame(.{ 0, 1 }, .{ pos + 1, pos }, size))
+                if (pos < bound1.count and try self.validateSame(.{ 0, 1 }, .{ pos + 1, pos }, size, initial))
                     continue;
 
                 try self.work[1].append(.{
@@ -279,19 +354,30 @@ pub const Swap = struct {
     }
 
     /// Perform the work we've set ourselves to do.
-    fn performWork(self: *Self) !void {
-        std.log.warn("Performing work", .{});
-        for (self.work) |work, i| {
-            std.log.warn("Work, phase: {}", .{i});
-            for (work.constSlice()) |*item| {
-                std.log.warn("Work: {s}", .{fmtWork(item)});
+    fn performWork(self: *Self, next: Recovered) !void {
+        // std.log.warn("Performing work", .{});
+        var i: usize = next.work;
+        while (i < self.work.len) : (i += 1) {
+            const work = &self.work[i];
+            // std.log.warn("Work, phase: {}", .{i});
+            var step: usize = 0;
+            if (i == next.work) {
+                step = next.step;
+            }
+            while (step < work.len) : (step += 1) {
+                const item = &work.buffer[step];
+                // std.log.warn("Work: {s}", .{fmtWork(item)});
                 try self.areas[item.dest_slot].erase(item.dest_page << page_shift, page_size);
                 try self.areas[item.src_slot].read(item.src_page << page_shift, self.tmp[0..]);
                 try self.checkHash(item, self.tmp[0..]);
                 try self.areas[item.dest_slot].write(item.dest_page << page_shift, self.tmp[0..]);
             }
 
-            // TODO: Advance state when that makes sense.
+            // If we finish Sliding, we need to write a new status
+            // page.
+            if (i == 0) {
+                try self.status[0].updateStatus(.Swap);
+            }
         }
     }
 
@@ -414,12 +500,15 @@ pub const Swap = struct {
     // Ensure that two pages that have the same hash are actually the
     // same.  Returns error.HashCollision if they differ, which will
     // result in higher-level code retrying with a different prefix.
-    fn validateSame(self: *Self, slots: [2]u8, pages: [2]usize, len: usize) !bool {
+    fn validateSame(self: *Self, slots: [2]u8, pages: [2]usize, len: usize, initial: bool) !bool {
         if (std.mem.eql(
             u8,
             self.hashes[slots[0]][pages[0]][0..],
             self.hashes[slots[1]][pages[1]][0..],
         )) {
+            if (initial)
+                return true;
+
             // If the hashes match, compare the page contents.
             std.log.err("TODO: Page comparison slots {any}, pages {any}", .{ slots, pages });
             _ = len;
@@ -473,7 +562,7 @@ const RecoveryTest = struct {
     const BootTest = @import("test.zig").BootTest;
 
     // These are just sizes we will use for testing.
-    const testSizes = if (false)
+    const testSizes = if (true)
         [2]usize{ 112 * Swap.page_size + 7, 105 * Swap.page_size + Swap.page_size - 1 }
     else
         [2]usize{ 2 * Swap.page_size + 7, 1 * Swap.page_size + Swap.page_size - 1 };
@@ -496,6 +585,7 @@ const RecoveryTest = struct {
     fn single(self: *Self, limit: usize, sizes: [2]usize) !void {
         var lim: usize = limit;
         while (true) : (lim += 1) {
+            std.log.info("##### Testing limit {} #####", .{lim});
             try self.bt.sim.installImages(sizes);
 
             var swap = try Swap.init(&self.bt.sim, sizes, 1);
@@ -505,7 +595,7 @@ const RecoveryTest = struct {
 
             // Set our limit, stopping after that many flash steps.
             self.bt.sim.counter.reset();
-            try self.bt.sim.counter.setLimit(limit);
+            try self.bt.sim.counter.setLimit(lim);
 
             // TODO: Handle hash collision, restarting as appropriate.
             var interrupted = false;
@@ -515,6 +605,7 @@ const RecoveryTest = struct {
                 if (err != error.Expired)
                     return err;
                 interrupted = true;
+                // std.log.info("---------------------- Interrupt --------------------", .{});
             }
 
             if (interrupted) {
@@ -532,10 +623,6 @@ const RecoveryTest = struct {
 
             if (!interrupted)
                 break;
-
-            // Until we're ready for a full test, just do a single
-            // run.
-            break;
         }
     }
 };
@@ -544,7 +631,7 @@ test "Swap recovery" {
     std.testing.log_level = .info;
     var tt = try RecoveryTest.init();
     defer tt.deinit();
-    try tt.single(3, RecoveryTest.testSizes);
+    try tt.single(1, RecoveryTest.testSizes);
 
     // Write out the swap status.
     try (try tt.bt.sim.open(0)).save("swap-0.bin");

@@ -10,7 +10,9 @@ area: *sys.flash.FlashArea = undefined,
 buf_last: LastPage = undefined,
 buf_hash: HashPage = undefined,
 
-last_seq: u32 = 0,
+// The last page we've written to.  0 is the "ultimate" page, and '1'
+// is the penultimate page.
+last_page: u1 = 0,
 
 const std = @import("std");
 const testing = std.testing;
@@ -48,6 +50,17 @@ pub const Phase = enum(u8) {
     /// Indicates that we have completed everything, the images are
     /// swapped.
     Done,
+
+    /// Query which step of work is done by this phase, or return
+    /// error.InvalidPhase if this is not a phase indicating work to
+    /// be done.
+    pub fn whichWork(self: Phase) !usize {
+        switch (self) {
+            .Slide => return 0,
+            .Swap => return 1,
+            else => return error.InvalidPhase,
+        }
+    }
 };
 
 pub fn init(fa: *sys.flash.FlashArea) !Self {
@@ -106,6 +119,7 @@ pub fn scan(self: *Self) !Phase {
             // The buf_last is now the current version of the last
             // data.
             valid = true;
+            self.last_page = 0;
         } else {
             // The ultimate one is valid, but we overwrote the buffer
             // when we read the penult.
@@ -121,6 +135,7 @@ pub fn scan(self: *Self) !Phase {
             // The penultimate buffer is the only valid one, so just
             // use it.
             valid = true;
+            self.last_page = 1;
         } else {
             // Nothing is valid.
         }
@@ -243,14 +258,13 @@ pub fn startStatus(self: *Self, st: *Swap) !void {
     const total_hashes = asPages(st.sizes[0]) + asPages(st.sizes[1]);
 
     // TODO: Use buf_last
-    var last: LastPage = undefined;
-    std.mem.set(u8, std.mem.asBytes(&last), 0xFF);
+    std.mem.set(u8, std.mem.asBytes(&self.buf_last), 0xFF);
 
     const ult = (self.area.size >> page_shift) - 1;
     const penult = ult - 1;
 
-    if (total_hashes > last.hashes.len) {
-        var remaining = total_hashes - last.hashes.len;
+    if (total_hashes > self.buf_last.hashes.len) {
+        var remaining = total_hashes - self.buf_last.hashes.len;
         while (remaining > 0) {
             extras += 1;
             var count = self.buf_hash.hashes.len;
@@ -300,19 +314,19 @@ pub fn startStatus(self: *Self, st: *Swap) !void {
     }
     extras = old_extras;
 
-    last.sizes[0] = @intCast(u32, st.sizes[0]);
-    last.sizes[1] = @intCast(u32, st.sizes[1]);
-    std.mem.copy(u8, last.prefix[0..], st.prefix[0..]);
-    last.phase = .Slide;
-    last.swap_info = 0;
-    last.copy_done = 0;
-    last.image_ok = 0;
-    last.seq = 1;
+    self.buf_last.sizes[0] = @intCast(u32, st.sizes[0]);
+    self.buf_last.sizes[1] = @intCast(u32, st.sizes[1]);
+    std.mem.copy(u8, self.buf_last.prefix[0..], st.prefix[0..]);
+    self.buf_last.phase = .Slide;
+    self.buf_last.swap_info = 0;
+    self.buf_last.copy_done = 0;
+    self.buf_last.image_ok = 0;
+    self.buf_last.seq = 1;
 
     dst = 0;
-    while (dst < last.hashes.len) : (dst += 1) {
+    while (dst < self.buf_last.hashes.len) : (dst += 1) {
         if (srcIter.next()) |src| {
-            std.mem.copy(u8, last.hashes[dst][0..], src[0..]);
+            std.mem.copy(u8, self.buf_last.hashes[dst][0..], src[0..]);
         } else {
             break;
         }
@@ -321,16 +335,46 @@ pub fn startStatus(self: *Self, st: *Swap) !void {
     // TODO: Write out the other pages.
 
     // Update the hash.
-    const lasthash = Swap.calcHash(std.mem.asBytes(&last)[0 .. 512 - 20]);
-    std.mem.copy(u8, last.hash[0..], lasthash[0..]);
-    last.magic = page_magic;
+    const lasthash = Swap.calcHash(std.mem.asBytes(&self.buf_last)[0 .. 512 - 20]);
+    std.mem.copy(u8, self.buf_last.hash[0..], lasthash[0..]);
+    self.buf_last.magic = page_magic;
 
     try self.area.erase(ult << page_shift, page_size);
     try self.area.erase(penult << page_shift, page_size);
-    try self.area.write(ult << page_shift, std.mem.asBytes(&last));
+    try self.area.write(ult << page_shift, std.mem.asBytes(&self.buf_last));
 
-    std.log.info("Writing initial status: {} hash pages", .{total_hashes});
-    std.log.info("2 pages at end + {} extra pages", .{extras});
+    // std.log.info("Writing initial status: {} hash pages", .{total_hashes});
+    // std.log.info("2 pages at end + {} extra pages", .{extras});
+
+    // The last (and only) page written was the ultimate page.
+    self.last_page = 0;
+}
+
+// Update the status page with a new phase.
+pub fn updateStatus(self: *Self, phase: Phase) !void {
+    // Increment the sequence number.
+    self.buf_last.seq += 1;
+    self.buf_last.phase = phase;
+
+    // Update the hash
+    const lasthash = Swap.calcHash(std.mem.asBytes(&self.buf_last)[0 .. 512 - 20]);
+    std.mem.copy(u8, self.buf_last.hash[0..], lasthash[0..]);
+
+    // Toggle phases.
+    const ult = (self.area.size >> page_shift) - 1;
+    const penult = ult - 1;
+    const pages = [2]usize{ ult, penult };
+
+    self.last_page = 1 - self.last_page;
+    const this_page = pages[self.last_page];
+    const other_page = pages[1 - self.last_page];
+
+    // std.log.info("Updating status: (off {x}), new {}, old {}", .{ self.area.off, this_page, other_page });
+
+    // Write out.  Sequence is important here.
+    try self.area.erase(this_page << page_shift, page_size);
+    try self.area.write(this_page << page_shift, std.mem.asBytes(&self.buf_last));
+    try self.area.erase(other_page << page_shift, page_size);
 }
 
 // Assuming that the buf_last has been loaded with the correct image
